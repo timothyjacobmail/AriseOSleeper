@@ -38,6 +38,7 @@ class VerseAlarmActivity : AppCompatActivity() {
     private var practice: AlarmVerse? = null
     private var editingSettings = false
     private var previewSound: android.media.Ringtone? = null
+    private val expandedPassageSections = mutableSetOf("saved-passages")
     private val speech = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val text = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
         val current = VerseAlarmStore.read(this).challenge?.id ?: practice?.id
@@ -60,9 +61,14 @@ class VerseAlarmActivity : AppCompatActivity() {
         setTurnScreenOn(true)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or WindowManager.LayoutParams.FLAG_SECURE)
         speechId = savedInstanceState?.getString("speechId")
+        savedInstanceState?.getStringArrayList("expandedPassageSections")?.let {
+            expandedPassageSections.clear()
+            expandedPassageSections.addAll(it)
+        }
     }
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putString("speechId", speechId)
+        outState.putStringArrayList("expandedPassageSections", ArrayList(expandedPassageSections))
         super.onSaveInstanceState(outState)
     }
     override fun onResume() {
@@ -96,6 +102,10 @@ class VerseAlarmActivity : AppCompatActivity() {
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_LONG).show()
     private fun label(text: String, size: Float = 16f) = UiStyle.label(this, text, size)
     private fun button(text: String, action: () -> Unit) = UiStyle.button(this, text, onClick = action)
+    private fun passageDropdown(key: String, title: String, summary: String, children: List<View>) =
+        PassageDropdown(this, key, title, summary, key in expandedPassageSections, children) { expanded ->
+            if (expanded) expandedPassageSections.add(key) else expandedPassageSections.remove(key)
+        }
     private fun field(hint: String, value: String = "", number: Boolean = false) = EditText(this).apply {
         this.hint = hint
         setText(value)
@@ -333,8 +343,8 @@ class VerseAlarmActivity : AppCompatActivity() {
             })
         if (s.pending != null) views.add(button("Cancel pending settings change") { attempt { VerseAlarmStore.cancelChange(this) } })
         views.add(label("Your ESV passages", 22f))
-        views.add(label("Paste an ESV Bible share into the passage box to fill in its reference and text automatically, then tap Add passage. You can also enter them separately. You can add verses while the daily alarm is enabled. No passages are downloaded or bundled. Dictation uses your phone's speech provider and may require internet."))
         val canAddPassage = s.challenge == null
+        val addViews = mutableListOf<View>(label("Paste an ESV Bible share into the passage box to fill in its reference and text automatically, then tap Add passage. You can also enter them separately. No passages are downloaded or bundled."))
         val reference = field("Reference, e.g. Psalm 23:1").apply { isEnabled = canAddPassage }
         val passage = field("Paste ESV passage text without verse numbers").apply {
             minLines = 4
@@ -359,30 +369,43 @@ class VerseAlarmActivity : AppCompatActivity() {
             id = View.generateViewId()
             isEnabled = canAddPassage
         }
-        views.add(reference)
-        views.add(passage)
-        views.add(label("Quiet time for this passage (seconds)").apply { labelFor = quiet.id })
-        views.add(quiet)
-        views.add(button("Add passage") {
+        addViews.add(reference)
+        addViews.add(passage)
+        addViews.add(label("Quiet time for this passage (seconds)").apply { labelFor = quiet.id })
+        addViews.add(quiet)
+        addViews.add(button("Add passage") {
             attempt { VerseAlarmStore.addVerse(this, reference.text.toString(), passage.text.toString(),
                 quiet.text.toString().toIntOrNull() ?: -1) }
         }.apply { isEnabled = canAddPassage })
-        if (!canAddPassage) views.add(label("Finish all checks in the current wake-up routine to add new passages."))
-        views.add(label("Each passage has its own quiet time, used by both Quiet and Dictate. Set 1-3600 seconds (up to 60 minutes). Quiet times can be edited when no routine is active."))
+        if (!canAddPassage) addViews.add(label("Finish all checks in the current wake-up routine to add new passages."))
+        views.add(passageDropdown("add-passage", "Add a passage",
+            if (canAddPassage) "Paste a Bible share or enter text manually" else "Available after the current routine", addViews))
+        val savedViews = mutableListOf<View>()
+        if (s.verses.isEmpty()) savedViews.add(label("No passages yet. Open Add a passage above to start your library."))
         s.verses.forEach { v ->
-            views.add(label("${v.reference} · ${v.successes} completions · ${if (v.successes >= s.config.memoryAfter) "Memory" else "Learning"}"))
+            val verseViews = mutableListOf<View>(label(if (canAddPassage) v.text
+                else "Passage text is hidden during a wake-up routine."))
             val verseQuiet = field("Quiet time in seconds (1-3600)", v.quietSeconds.toString(), true).apply {
                 id = View.generateViewId()
                 isEnabled = canAddPassage
             }
-            views.add(label("Quiet time for ${v.reference} (seconds)").apply { labelFor = verseQuiet.id })
-            views.add(verseQuiet)
-            views.add(button("Save quiet time for ${v.reference}") {
+            verseViews.add(label("Quiet time for ${v.reference} (seconds)").apply { labelFor = verseQuiet.id })
+            verseViews.add(verseQuiet)
+            verseViews.add(button("Save quiet time for ${v.reference}") {
                 attempt { VerseAlarmStore.setQuietTime(this, v.id, verseQuiet.text.toString().toIntOrNull() ?: -1) }
             }.apply { isEnabled = canAddPassage })
-            views.add(button("Practice ${v.reference}") { practice = v; rendered = ""; refresh() })
-            if (!s.config.enabled) views.add(button("Remove ${v.reference}") { attempt { VerseAlarmStore.removeVerse(this, v.id) } })
+            verseViews.add(label("Quiet and Dictate share one quiet period per check. Use 1-3600 seconds (up to 60 minutes). Dictation uses your phone's speech provider and may require internet."))
+            if (!canAddPassage) verseViews.add(label("Finish the current routine to edit quiet time."))
+            verseViews.add(button("Practice ${v.reference}") { practice = v; rendered = ""; refresh() }
+                .apply { isEnabled = canAddPassage })
+            if (!s.config.enabled) verseViews.add(button("Remove ${v.reference}") { attempt { VerseAlarmStore.removeVerse(this, v.id) } })
+            val progress = if (v.successes >= s.config.memoryAfter) "Memory · ${v.successes} completions"
+                else "Learning · ${v.successes}/${s.config.memoryAfter} completions"
+            savedViews.add(passageDropdown("verse:${v.id}", v.reference, "$progress · ${v.quietSeconds}s quiet", verseViews))
         }
+        val learningCount = s.verses.count { it.successes < s.config.memoryAfter }
+        views.add(passageDropdown("saved-passages", "Saved passages (${s.verses.size})",
+            if (s.verses.isEmpty()) "Your library is empty" else "$learningCount learning · ${s.verses.size - learningCount} from memory", savedViews))
         views.add(button(if (s.challenge != null) "Back to wake-up check" else "Close app") {
             if (s.challenge != null) { editingSettings = false; rendered = ""; refresh() } else finish()
         })

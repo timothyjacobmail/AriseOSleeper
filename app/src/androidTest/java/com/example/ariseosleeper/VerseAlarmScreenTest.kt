@@ -17,6 +17,8 @@ import org.junit.Test
 class VerseAlarmScreenTest {
     private fun descendants(v: View): List<View> = listOf(v) +
         if (v is ViewGroup) (0 until v.childCount).flatMap { descendants(v.getChildAt(it)) } else emptyList()
+    private fun <T : View> VerseAlarmActivity.findViewWithTag(tag: String): T =
+        findViewById<View>(android.R.id.content).findViewWithTag(tag)
 
     @Test fun pastedBibleShareFillsFieldsAndSavesOnlyReferenceAndPassage() {
         val c = InstrumentationRegistry.getInstrumentation().targetContext
@@ -28,6 +30,7 @@ class VerseAlarmScreenTest {
             ActivityScenario.launch<VerseAlarmActivity>(Intent(c, VerseAlarmActivity::class.java)).use { scenario ->
                 scenario.onActivity { activity ->
                     fun views() = descendants(activity.findViewById(android.R.id.content))
+                    activity.findViewWithTag<View>("add-passage:toggle").performClick()
                     val fields = views().filterIsInstance<EditText>()
                     val reference = fields.first { it.hint == "Reference, e.g. Psalm 23:1" }
                     val passage = fields.first { it.hint == "Paste ESV passage text without verse numbers" }
@@ -91,6 +94,12 @@ class VerseAlarmScreenTest {
                     click("Quiet for 900 seconds")
                     assertEquals("wrong answer", views().filterIsInstance<EditText>().single().text.toString())
                     assertTrue(VerseAlarmStore.read(c).challenge!!.quietUsed)
+                    click("Alarm settings")
+                    val verse = VerseAlarmStore.read(c).verses.single()
+                    activity.findViewWithTag<View>("verse:${verse.id}:toggle").performClick()
+                    assertFalse(views().filterIsInstance<TextView>().any { it.text.toString() == verse.text })
+                    assertFalse(views().filterIsInstance<TextView>()
+                        .first { it.text.toString() == "Practice ${verse.reference}" }.isEnabled)
                 }
             }
         } finally {
@@ -121,6 +130,8 @@ class VerseAlarmScreenTest {
                     click("Save alarm settings")
                     assertEquals(5, VerseAlarmStore.read(c).config.sessions)
                     assertEquals(listOf(VerseAlarmTime(18, 0)), VerseAlarmStore.read(c).config.times)
+                    val verseId = VerseAlarmStore.read(c).verses.single().id
+                    activity.findViewWithTag<View>("verse:$verseId:toggle").performClick()
                     field("Quiet time for Test passage (seconds)").setText("125")
                     click("Save quiet time for Test passage")
                     assertEquals(125, VerseAlarmStore.read(c).verses.single().quietSeconds)
@@ -130,6 +141,70 @@ class VerseAlarmScreenTest {
                     val fields = descendants(activity.findViewById(android.R.id.content)).filterIsInstance<EditText>()
                     assertEquals("5", fields.first { it.hint == "Sessions per alarm (1-20)" }.text.toString())
                     assertTrue(fields.any { it.text.toString() == "125" })
+                }
+            }
+        } finally {
+            prefs.edit().clear().putString("state", original).commit()
+            VerseAlarmScheduler.reschedule(c)
+        }
+    }
+
+    @Test fun passageDropdownsHideClutterAndKeepStateAcrossEditsPracticeAndRecreation() {
+        val c = InstrumentationRegistry.getInstrumentation().targetContext
+        val prefs = c.createDeviceProtectedStorageContext().getSharedPreferences("verse_alarm", Context.MODE_PRIVATE)
+        val original = prefs.getString("state", null)
+        try {
+            prefs.edit().clear().commit()
+            VerseAlarmStore.addVerse(c, "First passage", "Begin today with a clear mind.")
+            VerseAlarmStore.addVerse(c, "Second passage", "Open the window and welcome the morning.")
+            val firstKey = "verse:${VerseAlarmStore.read(c).verses[0].id}"
+            val secondKey = "verse:${VerseAlarmStore.read(c).verses[1].id}"
+            ActivityScenario.launch<VerseAlarmActivity>(Intent(c, VerseAlarmActivity::class.java)).use { scenario ->
+                scenario.onActivity { activity ->
+                    fun body(key: String) = activity.findViewWithTag<View>("$key:content")
+                    fun toggle(key: String) = activity.findViewWithTag<View>("$key:toggle").performClick()
+                    fun click(text: String) = descendants(activity.findViewById(android.R.id.content))
+                        .filterIsInstance<TextView>().first { it.text.toString() == text }.performClick()
+                    fun quiet(): EditText {
+                        val label = descendants(body(firstKey)).filterIsInstance<TextView>()
+                            .first { it.text.toString() == "Quiet time for First passage (seconds)" }
+                        return activity.findViewById(label.labelFor)
+                    }
+                    assertEquals(View.GONE, body("add-passage").visibility)
+                    assertEquals(View.VISIBLE, body("saved-passages").visibility)
+                    assertEquals(View.GONE, body(firstKey).visibility)
+                    assertEquals(View.GONE, body(secondKey).visibility)
+                    toggle(firstKey)
+                    assertTrue(body(firstKey).isShown)
+                    assertEquals("Expanded", activity.findViewWithTag<View>("$firstKey:toggle").stateDescription)
+                    assertFalse(body(secondKey).isShown)
+                    quiet().setText("125")
+                    toggle(firstKey)
+                    assertFalse(body(firstKey).isShown)
+                    toggle(firstKey)
+                    assertEquals("125", quiet().text.toString())
+                    click("Save quiet time for First passage")
+                    assertEquals(125, VerseAlarmStore.read(c).verses.first().quietSeconds)
+                    assertTrue(body(firstKey).isShown)
+                    assertFalse(body(secondKey).isShown)
+                    click("Practice First passage")
+                    click("Back to alarm settings")
+                    assertTrue(body(firstKey).isShown)
+                }
+                scenario.recreate()
+                scenario.onActivity { activity ->
+                    assertTrue(activity.findViewWithTag<View>("$firstKey:content").isShown)
+                    activity.findViewWithTag<View>("saved-passages:toggle").performClick()
+                    assertFalse(activity.findViewWithTag<View>("$firstKey:content").isShown)
+                }
+                scenario.recreate()
+                scenario.onActivity { activity ->
+                    assertEquals(View.GONE, activity.findViewWithTag<View>("saved-passages:content").visibility)
+                    activity.findViewWithTag<View>("saved-passages:toggle").performClick()
+                    assertTrue(activity.findViewWithTag<View>("$firstKey:content").isShown)
+                    descendants(activity.findViewById(android.R.id.content)).filterIsInstance<TextView>()
+                        .first { it.text.toString() == "Remove First passage" }.performClick()
+                    assertEquals(listOf("Second passage"), VerseAlarmStore.read(c).verses.map { it.reference })
                 }
             }
         } finally {
