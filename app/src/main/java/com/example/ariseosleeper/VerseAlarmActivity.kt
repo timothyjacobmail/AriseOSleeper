@@ -1,7 +1,11 @@
 package com.example.ariseosleeper
 
+import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -39,6 +43,11 @@ class VerseAlarmActivity : AppCompatActivity() {
     private var editingSettings = false
     private var previewSound: android.media.Ringtone? = null
     private val expandedPassageSections = mutableSetOf("saved-passages")
+    private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (!granted) toast("Notifications are still off. Tap Allow notifications to try again or open notification settings.")
+        rendered = ""
+        refresh()
+    }
     private val speech = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val text = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
         val current = VerseAlarmStore.read(this).challenge?.id ?: practice?.id
@@ -309,12 +318,24 @@ class VerseAlarmActivity : AppCompatActivity() {
             id = View.generateViewId()
         }
         val memoryLabel = label("Successful completions before memory mode").apply { labelFor = threshold.id }
-        val needs = VerseAlarmScheduler.readiness(this)
+        val needs = AlarmSetup.missing(this)
+        val setupViews = mutableListOf<View>(label("Alarm setup", 22f),
+            label(if (needs.isEmpty()) "Alarm permissions are ready. Test the sound and dictation on your phone before relying on this alarm."
+                else "Complete these steps before enabling alarms. Tap a button below, allow access in Android, then return here and save your alarm settings."))
+        needs.forEach { step ->
+            setupViews.add(label(step.explanation))
+            setupViews.add(button(step.title) { requestAlarmSetup(step) }.apply { tag = "alarm-setup:${step.name}" })
+        }
+        enabled.setOnCheckedChangeListener { _, checked ->
+            if (checked) AlarmSetup.missing(this).firstOrNull()?.let(::requestAlarmSetup)
+        }
         val views = mutableListOf<View>(label(getString(R.string.app_name), 26f), status!!,
             label("Learn a passage with its text visible, then write or recite it from memory. Each verse has its own count. Choose the number of sessions (verse checks) per alarm, five minutes apart. A one-minute warning lets you finish each verse before the alarm rings."),
             label("Daily times follow your phone's time zone. Settings changes save immediately when no wake-up routine is running. During a routine, changes have a 15-minute wait and cannot end the current routine. The wait ends when all checks are complete."),
-            label(if (needs.isEmpty()) "Alarm permissions are ready. Test the sound and dictation on your phone before relying on this alarm."
-                else "Setup needed in Android Settings for Arise O Sleeper!:\n${needs.joinToString("\n")}"),
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setupViews.forEach { addView(it, LinearLayout.LayoutParams(-1, -2)) }
+            },
             button("Sound settings") { openSetting(Intent(Settings.ACTION_SOUND_SETTINGS)) },
             button("Test alarm sound · 5 seconds") {
                 previewSound?.stop()
@@ -337,7 +358,10 @@ class VerseAlarmActivity : AppCompatActivity() {
                         times.first().minute, threshold.text.toString().toIntOrNull() ?: -1,
                         sessions.text.toString().toIntOrNull() ?: -1, times.drop(1))
                     require(config.valid()) { "Use 1-20 sessions, a memory threshold of 2-20, and up to 24 different alarm times." }
-                    if (config.enabled) require(VerseAlarmScheduler.readiness(this).isEmpty()) { "Complete the alarm setup above first." }
+                    if (config.enabled) AlarmSetup.missing(this).firstOrNull()?.let { step ->
+                        requestAlarmSetup(step)
+                        return@attempt
+                    }
                     VerseAlarmStore.saveConfig(this, config)
                 }
             })
@@ -413,5 +437,27 @@ class VerseAlarmActivity : AppCompatActivity() {
     }
     private fun openSetting(intent: Intent) {
         try { startActivity(intent) } catch (_: ActivityNotFoundException) { toast("This setting is unavailable on this phone.") }
+    }
+
+    private fun requestAlarmSetup(step: AlarmSetupStep) {
+        if (VerseAlarmStore.read(this).challenge != null) {
+            toast("Finish the current wake-up routine before changing alarm permissions.")
+            return
+        }
+        if (step == AlarmSetupStep.NOTIFICATIONS && Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            val prefs = getSharedPreferences("alarm_setup", MODE_PRIVATE)
+            val askedBefore = prefs.getBoolean("askedNotifications", false)
+            if (!askedBefore || shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS)) {
+                prefs.edit().putBoolean("askedNotifications", true).apply()
+                notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                return
+            }
+        }
+        try {
+            startActivity(step.settingsIntent(this))
+        } catch (_: ActivityNotFoundException) {
+            openSetting(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+        }
     }
 }

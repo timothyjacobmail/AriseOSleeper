@@ -7,7 +7,6 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.media.AudioManager
 import android.os.Build
 import android.util.Log
 
@@ -35,19 +34,7 @@ internal object VerseAlarmScheduler {
         VerseAlarmWarning.channel(c)
     }
 
-    fun readiness(c: Context): List<String> = buildList {
-        channel(c)
-        if (Build.VERSION.SDK_INT >= 31 && !c.getSystemService(AlarmManager::class.java).canScheduleExactAlarms())
-            add("Allow Alarms & reminders")
-        val manager = c.getSystemService(NotificationManager::class.java)
-        if (!manager.areNotificationsEnabled() || manager.getNotificationChannel(CHANNEL).importance < NotificationManager.IMPORTANCE_HIGH)
-            add("Allow high-priority alarm notifications")
-        if (manager.getNotificationChannel(VerseAlarmWarning.CHANNEL).importance < NotificationManager.IMPORTANCE_HIGH)
-            add("Allow one-minute verse warning notifications")
-        if (Build.VERSION.SDK_INT >= 34 && !manager.canUseFullScreenIntent()) add("Allow full-screen alarms")
-        if (c.getSystemService(AudioManager::class.java).getStreamVolume(AudioManager.STREAM_ALARM) == 0)
-            add("Raise the alarm volume above zero")
-    }
+    fun readiness(c: Context): List<String> = AlarmSetup.missing(c).map { it.title }
 
     fun reschedule(c: Context, timeChanged: Boolean = false, boot: Boolean = false) {
         val now = AlarmClock.now(c)
