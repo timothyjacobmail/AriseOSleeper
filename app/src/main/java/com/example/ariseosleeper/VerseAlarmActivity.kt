@@ -21,6 +21,7 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.AppCompatEditText
+import androidx.core.widget.doAfterTextChanged
 import com.google.android.material.timepicker.MaterialTimePicker
 import com.google.android.material.timepicker.TimeFormat
 import java.text.DateFormat
@@ -332,12 +333,27 @@ class VerseAlarmActivity : AppCompatActivity() {
             })
         if (s.pending != null) views.add(button("Cancel pending settings change") { attempt { VerseAlarmStore.cancelChange(this) } })
         views.add(label("Your ESV passages", 22f))
-        views.add(label("Add passages below, with the reference separate. You can add verses while the daily alarm is enabled. No passages are downloaded or bundled. Dictation uses your phone's speech provider and may require internet."))
+        views.add(label("Paste an ESV Bible share into the passage box to fill in its reference and text automatically, then tap Add passage. You can also enter them separately. You can add verses while the daily alarm is enabled. No passages are downloaded or bundled. Dictation uses your phone's speech provider and may require internet."))
         val canAddPassage = s.challenge == null
         val reference = field("Reference, e.g. Psalm 23:1").apply { isEnabled = canAddPassage }
         val passage = field("Paste ESV passage text without verse numbers").apply {
             minLines = 4
             isEnabled = canAddPassage
+        }
+        var parsingShare = false
+        passage.doAfterTextChanged { value ->
+            if (!parsingShare) {
+                SharedVerseParser.parse(value.toString())?.let { parsed ->
+                    parsingShare = true
+                    try {
+                        reference.setText(parsed.reference)
+                        passage.setText(parsed.passage)
+                        passage.setSelection(passage.length())
+                    } finally {
+                        parsingShare = false
+                    }
+                }
+            }
         }
         val quiet = field("Quiet time in seconds (1-3600)", "60", true).apply {
             id = View.generateViewId()

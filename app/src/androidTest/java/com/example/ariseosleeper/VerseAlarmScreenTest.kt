@@ -18,6 +18,50 @@ class VerseAlarmScreenTest {
     private fun descendants(v: View): List<View> = listOf(v) +
         if (v is ViewGroup) (0 until v.childCount).flatMap { descendants(v.getChildAt(it)) } else emptyList()
 
+    @Test fun pastedBibleShareFillsFieldsAndSavesOnlyReferenceAndPassage() {
+        val c = InstrumentationRegistry.getInstrumentation().targetContext
+        val prefs = c.createDeviceProtectedStorageContext().getSharedPreferences("verse_alarm", Context.MODE_PRIVATE)
+        val original = prefs.getString("state", null)
+        val text = "On the third day there was a wedding at Cana in Galilee, and the mother of Jesus was there."
+        try {
+            prefs.edit().clear().commit()
+            ActivityScenario.launch<VerseAlarmActivity>(Intent(c, VerseAlarmActivity::class.java)).use { scenario ->
+                scenario.onActivity { activity ->
+                    fun views() = descendants(activity.findViewById(android.R.id.content))
+                    val fields = views().filterIsInstance<EditText>()
+                    val reference = fields.first { it.hint == "Reference, e.g. Psalm 23:1" }
+                    val passage = fields.first { it.hint == "Paste ESV passage text without verse numbers" }
+                    reference.setText("Replace this old draft reference")
+                    passage.requestFocus()
+                    val connection = passage.onCreateInputConnection(EditorInfo())!!
+                    connection.commitText(",“$text ”\nJohn 2:1 ESV\n\nhttps://bible.com/bible/59/jhn.2.1.ESV'", 1)
+                    assertEquals("John 2:1", reference.text.toString())
+                    assertEquals(text, passage.text.toString())
+                    fields.first { it.hint == "Quiet time in seconds (1-3600)" }.setText("75")
+                    views().filterIsInstance<TextView>().first { it.text.toString() == "Add passage" }.performClick()
+                    val saved = VerseAlarmStore.read(c).verses.single()
+                    assertEquals("John 2:1", saved.reference)
+                    assertEquals(text, saved.text)
+                    assertEquals(75, saved.quietSeconds)
+                }
+                scenario.recreate()
+                scenario.onActivity { activity ->
+                    assertTrue(descendants(activity.findViewById(android.R.id.content))
+                        .filterIsInstance<TextView>().any { it.text.startsWith("John 2:1") })
+                    val fields = descendants(activity.findViewById(android.R.id.content)).filterIsInstance<EditText>()
+                    fields.first { it.hint == "Reference, e.g. Psalm 23:1" }.setText("Manual reference")
+                    fields.first { it.hint == "Paste ESV passage text without verse numbers" }.setText("Plain passage text still works.")
+                    descendants(activity.findViewById(android.R.id.content)).filterIsInstance<TextView>()
+                        .first { it.text.toString() == "Add passage" }.performClick()
+                    assertEquals(listOf("John 2:1", "Manual reference"), VerseAlarmStore.read(c).verses.map { it.reference })
+                }
+            }
+        } finally {
+            prefs.edit().clear().putString("state", original).commit()
+            VerseAlarmScheduler.reschedule(c)
+        }
+    }
+
     @Test fun wrongAnswerStaysVisibleAndQuietPreservesInput() {
         val c = InstrumentationRegistry.getInstrumentation().targetContext
         val prefs = c.createDeviceProtectedStorageContext().getSharedPreferences("verse_alarm", Context.MODE_PRIVATE)
