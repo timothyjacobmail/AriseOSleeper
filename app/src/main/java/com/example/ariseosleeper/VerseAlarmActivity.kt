@@ -10,7 +10,6 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
-import android.speech.RecognizerIntent
 import android.text.InputType
 import android.view.View
 import android.view.KeyEvent
@@ -22,6 +21,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import android.widget.Button
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.AppCompatEditText
@@ -38,7 +38,22 @@ class VerseAlarmActivity : AppCompatActivity() {
     private var status: TextView? = null
     private var answer: EditText? = null
     private var dictatedText: String? = null
-    private var speechId: String? = null
+    private var pendingDictation: String? = null
+    private var dictationStatus: TextView? = null
+    private var dictateButton: Button? = null
+    private var stopDictationButton: Button? = null
+    private var cancelDictationButton: Button? = null
+    private var checkAnswerButton: Button? = null
+    private val dictation by lazy {
+        VerseDictation(factory = { AndroidDictationEngine(this) }, isCurrent = { it == dictationTarget() },
+            onState = { updateDictationControls() }, onResult = { target, text ->
+                if (target == dictationTarget() && answer != null) {
+                    answer?.setText(text)
+                    answer?.setSelection(answer!!.length())
+                    dictatedText = text
+                }
+            })
+    }
     private var practice: AlarmVerse? = null
     private var editingSettings = false
     private var previewSound: android.media.Ringtone? = null
@@ -48,14 +63,11 @@ class VerseAlarmActivity : AppCompatActivity() {
         rendered = ""
         refresh()
     }
-    private val speech = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        val text = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
-        val current = VerseAlarmStore.read(this).challenge?.id ?: practice?.id
-        if (result.resultCode == RESULT_OK && text != null && speechId == current) {
-            dictatedText = text
-            answer?.setText(text)
-        } else if (result.resultCode == RESULT_OK) toast("The challenge changed. Please dictate again.")
-        speechId = null
+    private val microphonePermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) continuePendingDictation() else {
+            pendingDictation = null
+            toast("Microphone permission is needed for Dictate. You can still type the passage.")
+        }
     }
     private val tick = object : Runnable {
         override fun run() {
@@ -69,14 +81,14 @@ class VerseAlarmActivity : AppCompatActivity() {
         setShowWhenLocked(true)
         setTurnScreenOn(true)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or WindowManager.LayoutParams.FLAG_SECURE)
-        speechId = savedInstanceState?.getString("speechId")
+        pendingDictation = savedInstanceState?.getString("pendingDictation")
         savedInstanceState?.getStringArrayList("expandedPassageSections")?.let {
             expandedPassageSections.clear()
             expandedPassageSections.addAll(it)
         }
     }
     override fun onSaveInstanceState(outState: Bundle) {
-        outState.putString("speechId", speechId)
+        outState.putString("pendingDictation", pendingDictation)
         outState.putStringArrayList("expandedPassageSections", ArrayList(expandedPassageSections))
         super.onSaveInstanceState(outState)
     }
@@ -90,7 +102,16 @@ class VerseAlarmActivity : AppCompatActivity() {
     override fun onPause() {
         handler.removeCallbacks(tick)
         previewSound?.stop()
+        dictation.cancel("Dictation stopped because you left the verse screen. Tap Dictate to start again.")
         super.onPause()
+    }
+    override fun onDestroy() {
+        dictation.cancel()
+        super.onDestroy()
+    }
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) continuePendingDictation()
     }
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (event.keyCode in listOf(KeyEvent.KEYCODE_VOLUME_DOWN, KeyEvent.KEYCODE_VOLUME_UP,
@@ -151,6 +172,8 @@ class VerseAlarmActivity : AppCompatActivity() {
         if (ch != null) practice = null
         val waiting = ch != null && !ch.canAnswer(now)
         val preview = ch?.warning(now) == true
+        if (dictation.state.active && dictation.state.target != dictationTarget())
+            dictation.cancel("The verse check changed. Tap Dictate again.")
         val key = if (ch != null) "${ch.id}|$waiting|$preview|${ch.quietUsed}|$editingSettings|${s.pending}" else
             "${s.config}|${s.pending}|${s.verses.hashCode()}|${practice?.id}"
         if (key != rendered) {
@@ -158,6 +181,11 @@ class VerseAlarmActivity : AppCompatActivity() {
             val previousDictation = dictatedText?.takeIf { it == previousAnswer }
             rendered = key
             dictatedText = null
+            dictationStatus = null
+            dictateButton = null
+            stopDictationButton = null
+            cancelDictationButton = null
+            checkAnswerButton = null
             when {
                 ch != null && editingSettings -> showSettings(s)
                 waiting -> showWaiting(ch!!)
@@ -169,6 +197,7 @@ class VerseAlarmActivity : AppCompatActivity() {
                 answer?.setText(previousAnswer)
                 dictatedText = previousDictation
             }
+            updateDictationControls()
         }
         status?.text = if (ch != null && editingSettings) buildString {
             append("A wake-up routine is active. Settings changes wait 15 minutes and cannot end the current routine.")
@@ -209,21 +238,76 @@ class VerseAlarmActivity : AppCompatActivity() {
         filters = arrayOf(android.text.InputFilter.LengthFilter(12_000))
     }
 
-    private fun dictate(id: String, realAlarm: Boolean) {
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
-            .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            .putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
-            .putExtra(RecognizerIntent.EXTRA_PROMPT, "Recite the passage without its reference")
-        try {
-            if (realAlarm) {
-                VerseAlarmStore.quiet(this, id)
+    private fun dictationTarget(): String? {
+        val ch = VerseAlarmStore.read(this).challenge
+        return if (ch != null) {
+            if (!editingSettings && ch.canAnswer(AlarmClock.now(this))) "alarm:${ch.id}" else null
+        } else practice?.let { "practice:${it.id}" }
+    }
+
+    private fun dictate() {
+        val target = dictationTarget() ?: return
+        if (dictation.state.active || pendingDictation != null) return
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            val prefs = getSharedPreferences("alarm_setup", MODE_PRIVATE)
+            if (prefs.getBoolean("askedMicrophone", false) &&
+                !shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO)) {
+                toast("Allow Microphone while using the app, then return and tap Dictate.")
+                openSetting(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+            } else {
+                pendingDictation = target
+                prefs.edit().putBoolean("askedMicrophone", true).apply()
+                microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
+            }
+            return
+        }
+        startDictation(target)
+    }
+
+    private fun continuePendingDictation() {
+        val target = pendingDictation ?: return
+        if (!hasWindowFocus() || checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return
+        pendingDictation = null
+        if (target == dictationTarget()) startDictation(target)
+        else toast("The verse check changed. Tap Dictate again.")
+    }
+
+    private fun startDictation(target: String) {
+        if (target != dictationTarget() || answer == null) return
+        dictation.start(target) {
+            if (target.startsWith("alarm:")) {
+                VerseAlarmStore.quiet(this, target.removePrefix("alarm:"))
                 VerseAlarmScheduler.sync(this)
                 refresh()
             }
-            speechId = id
-            speech.launch(intent)
-        } catch (_: ActivityNotFoundException) { toast("Speech recognition is unavailable. Type the passage or use your keyboard microphone.") }
-        catch (_: SecurityException) { toast("Unlock your phone to use speech recognition, or type the passage.") }
+        }
+    }
+
+    private fun dictationControls(): View = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        dictationStatus = label("").apply {
+            tag = "dictation-status"
+            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+        }
+        dictateButton = button("Dictate") { dictate() }
+        stopDictationButton = button("Stop dictation") { dictation.stop() }
+        cancelDictationButton = button("Cancel dictation") { dictation.cancel() }
+        listOf(dictationStatus!!, dictateButton!!, stopDictationButton!!, cancelDictationButton!!)
+            .forEach { addView(it, LinearLayout.LayoutParams(-1, -2)) }
+    }
+
+    private fun updateDictationControls() {
+        val state = dictation.state
+        val current = state.target == dictationTarget()
+        val active = current && state.active
+        dictationStatus?.text = if (current) state.message +
+            if (state.partial.isNotBlank()) "\n${state.partial}" else "" else ""
+        dictateButton?.isEnabled = !active
+        stopDictationButton?.visibility = if (active) View.VISIBLE else View.GONE
+        stopDictationButton?.isEnabled = active && state.phase != DictationPhase.PROCESSING
+        cancelDictationButton?.visibility = if (active) View.VISIBLE else View.GONE
+        answer?.isEnabled = !active
+        checkAnswerButton?.isEnabled = !active
     }
 
     private fun showChallenge(s: VerseAlarmState, ch: VerseChallenge) {
@@ -236,7 +320,7 @@ class VerseAlarmActivity : AppCompatActivity() {
                 else "Learning — ${v.successes}/${s.config.memoryAfter} completions before memory mode."),
             label(if (ch.fromMemory) "Write or recite the passage from memory. The text stays hidden during this challenge." else v.text),
             answer!!, label("Capitalization and punctuation do not matter. Include the passage only, without verse numbers."),
-            button("Dictate") { dictate(ch.id, true) },
+            dictationControls(),
             button("Check my verse") {
                 val value = answer!!.text.toString()
                 attempt {
@@ -247,7 +331,7 @@ class VerseAlarmActivity : AppCompatActivity() {
                         return@attempt
                     }
                 }
-            },
+            }.also { checkAnswerButton = it },
             button("Quiet for ${v.quietSeconds} seconds") {
                 attempt { VerseAlarmStore.quiet(this, ch.id) }
             }.apply { isEnabled = !ch.quietUsed && ch.ringing(AlarmClock.now(this@VerseAlarmActivity)) }, result,
@@ -260,11 +344,11 @@ class VerseAlarmActivity : AppCompatActivity() {
         answer = responseField()
         val result = label("")
         show(listOf(label("Practice · ${v.reference}", 26f), status!!, label(v.text), answer!!,
-            button("Dictate") { dictate(v.id, false) },
+            dictationControls(),
             button("Check practice") {
                 val value = answer!!.text.toString()
                 result.text = if (VerseAlarmRules.matches(v.text, value, dictatedText == value)) "Correct." else "Check the words and their order."
-            }, result, button("Back to alarm settings") { practice = null; rendered = ""; refresh() }))
+            }.also { checkAnswerButton = it }, result, button("Back to alarm settings") { practice = null; rendered = ""; refresh() }))
     }
 
     private fun showSettings(s: VerseAlarmState) {
