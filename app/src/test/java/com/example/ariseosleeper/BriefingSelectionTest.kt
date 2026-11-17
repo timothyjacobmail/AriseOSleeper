@@ -18,9 +18,30 @@ class BriefingSelectionTest {
         val tasks = TaskBriefing(listOf(BriefingTask("Call the office", null),
             BriefingTask("Submit form", today.minusDays(1))), listTitle = "Immediate Tasks")
         val text = BriefingTasks.summary(tasks, today)
-        assertTrue(text.contains("Call the office, no due date"))
+        assertTrue(text.contains("Call the office. Submit form, overdue"))
+        assertFalse(text.contains("no due date"))
+        assertFalse(text.contains("Call the office,"))
         assertTrue(text.contains("Submit form, overdue"))
         assertTrue(text.contains("From Immediate Tasks"))
+    }
+
+    @Test fun undatedTaskHasNoSpokenDateSuffix() {
+        assertEquals("From Immediate tasks, 1 incomplete task. Call the office.",
+            BriefingTasks.summary(TaskBriefing(listOf(BriefingTask("Call the office", null)), listTitle = "Immediate tasks"),
+                LocalDate.of(2026, 11, 17)))
+    }
+
+    @Test fun updateAgeIsOptionalAndUsesAnExactRollingWindow() {
+        val now = java.time.Instant.parse("2026-11-17T04:00:00Z")
+        assertNull(BriefingTasks.updatedCutoff(now, 0))
+        assertTrue(BriefingTasks.updatedSince("", null))
+        val cutoff = BriefingTasks.updatedCutoff(now, 2)
+        assertEquals(java.time.Instant.parse("2026-11-15T04:00:00Z"), cutoff)
+        assertTrue(BriefingTasks.updatedSince("2026-11-15T04:00:00Z", cutoff))
+        assertFalse(BriefingTasks.updatedSince("2026-11-15T03:59:59Z", cutoff))
+        assertTrue(BriefingTasks.updatedSince("2026-11-17T03:00:00Z", cutoff))
+        assertFalse(BriefingTasks.updatedSince("", cutoff))
+        assertFalse(BriefingTasks.updatedSince("not-a-date", cutoff))
     }
 
     @Test fun includeRulesAreScopedToTheirAppAndIgnoreRulesWin() {

@@ -15,6 +15,7 @@ Evaluate selection versus action, label length, comparison needs, available spac
 | Choose filter action, target field or match type | Visible radio rows | Alternatives need comparison while composing the rule. Save commits the entire rule. |
 | Choose an app for a filter | Read-only exposed dropdown | Familiar short app names require little comparison and fit compactly within the longer form. |
 | Choose a Google Tasks list | Searchable, single-selection list in a dialog | User-created names can be long and the list can grow. Search by name, retain stable list IDs, Apply to commit and Cancel to discard. |
+| Filter tasks by recency | Radio choice plus an outlined exact days field in a dialog | All update times is the default. Only recently updated tasks enables a 1–365-day field. Explain modification time versus unavailable creation time. Apply commits both values and Cancel preserves the prior filter. |
 | Choose an alarm time | Material time picker | Structured time selection respects the phone's 12/24-hour convention. Reject duplicate times. |
 | Enter exact sessions, completion threshold or quiet seconds | Numeric entry with limits and validation | Exact values matter. A slider would obscure precision. Preserve drafts and show errors at the affected field. |
 | Run, replay, stop, connect or add | Labeled button | These perform actions. Use a filled button for the primary next step, outlined buttons for supporting actions. |

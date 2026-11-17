@@ -116,6 +116,17 @@ class UiReviewTest {
                 main { views().filterIsInstance<RadioButton>().last { it.text.startsWith("Sender names only") }.performClick() }
                 click("Apply")
                 assertEquals(NotificationReadingMode.SENDERS_ONLY, NotificationReadingMode.read(context, "Gmail"))
+                reveal("WhatsApp reading\nMessage previews")
+                click("WhatsApp reading\nMessage previews")
+                main {
+                    val radios = views().filterIsInstance<RadioButton>().filter { it.isShown }
+                    assertEquals(5, radios.size)
+                    radios.last { it.text.startsWith("Count + sender names + previews") }.performClick()
+                }
+                reveal("Count + sender names + previews\nWaiting notification count and up to four previews with their sender names")
+                screenshot("notification-combinations")
+                click("Apply")
+                assertEquals(NotificationReadingMode.COUNT_SENDERS_AND_PREVIEWS, NotificationReadingMode.read(context, "WhatsApp"))
                 reveal("Task list\nImmediate tasks")
                 screenshot("tasks")
                 click("Task list\nImmediate tasks")
@@ -127,6 +138,27 @@ class UiReviewTest {
                 }
                 click("Apply")
                 assertEquals("personal", briefing.getString("task_list_id", ""))
+                reveal("Task recency\nAll update times")
+                click("Task recency\nAll update times")
+                main {
+                    assertEquals(0, briefing.getInt("tasks_updated_days", 0))
+                    views().filterIsInstance<RadioButton>().last { it.text.toString() == "Only recently updated tasks" }.performClick()
+                    views().filterIsInstance<EditText>().last { it.hint == "Number of days" }.setText("0")
+                }
+                click("Apply")
+                main {
+                    assertTrue(views().filterIsInstance<TextView>().any { it.text.toString() == "Enter a number from 1 to 365" })
+                    views().filterIsInstance<EditText>().last { it.hint == "Number of days" }.setText("2")
+                }
+                screenshot("task-recency")
+                click("Cancel")
+                assertEquals(0, briefing.getInt("tasks_updated_days", 0))
+                click("Task recency\nAll update times")
+                main {
+                    views().filterIsInstance<RadioButton>().last { it.text.toString() == "Only recently updated tasks" }.performClick()
+                }
+                click("Apply")
+                assertEquals(2, briefing.getInt("tasks_updated_days", 0))
                 reveal("Notification filters\nNo rules")
                 click("Notification filters\nNo rules")
                 screenshot("filters-empty")

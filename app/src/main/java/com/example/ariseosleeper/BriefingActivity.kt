@@ -24,6 +24,7 @@ class BriefingActivity : AppCompatActivity() {
     private var status: TextView? = null
     private var summary: TextView? = null
     private var taskListButton: Button? = null
+    private var taskRecencyButton: Button? = null
     private val notificationModeButtons = mutableMapOf<String, Button>()
     private var connecting = false
     private var pageScroll: ScrollView? = null
@@ -146,9 +147,10 @@ class BriefingActivity : AppCompatActivity() {
                     .remove("last_summary").remove("summary_at").apply()
             }
         }
-        sourceControls["tasks"] = listOf(taskListButton!!, dueOnly)
+        taskRecencyButton = setting("Task recency", "") { chooseTaskRecency() }
+        sourceControls["tasks"] = listOf(taskListButton!!, dueOnly, taskRecencyButton!!)
         val taskViews = listOf(source("Include Google Tasks", "tasks"), taskListButton!!, dueOnly,
-            label("With the date filter off, undated and overdue tasks are included."), taskStatus!!,
+            label("With the date filter off, undated and overdue tasks are included."), taskRecencyButton!!, taskStatus!!,
             connectButton!!, disconnectButton!!)
         summary = label("").apply { setTextIsSelectable(true) }
         val saved = UiComponents.section(this, "Last briefing", listOf(summary!!))
@@ -202,6 +204,9 @@ class BriefingActivity : AppCompatActivity() {
             controls.forEach { it.isEnabled = enabled && available }
         }
         taskListButton?.text = "Task list\n" + p.getString("task_list_title", "immediate tasks")
+        val recentDays = p.getInt("tasks_updated_days", 0)
+        taskRecencyButton?.text = "Task recency\n" + if (recentDays <= 0) "All update times"
+            else "Updated in the last $recentDays ${if (recentDays == 1) "day" else "days"}"
         connectButton?.text = if (connecting) "Connecting…" else
             if (p.getBoolean("tasks_connected", false)) "Check Google Tasks connection" else "Connect Google Tasks"
         connectButton?.isEnabled = !connecting
@@ -263,15 +268,9 @@ class BriefingActivity : AppCompatActivity() {
         }
     }
     private fun chooseNotificationMode(source: String) {
-        val modes = NotificationReadingMode.values().filter { source == "Gmail" || it != NotificationReadingMode.SENDERS_ONLY }
+        val modes = NotificationReadingMode.values().toList()
         val current = NotificationReadingMode.read(this, source)
-        val labels = modes.map { mode ->
-            mode.label + "\n" + when (mode) {
-                NotificationReadingMode.PREVIEWS -> "Sender and message text from the briefing window"
-                NotificationReadingMode.COUNT_ONLY -> "Number of notifications currently waiting"
-                NotificationReadingMode.SENDERS_ONLY -> "Unique sender names, without message text"
-            }
-        }
+        val labels = modes.map { it.label + "\n" + it.description }
         UiComponents.choiceDialog(this, "$source reading style", labels, modes.indexOf(current)) { index ->
             stopService(Intent(this, BriefingService::class.java))
             MorningBriefing.prefs(this).edit().putString("notification_mode_$source", modes[index].name)
@@ -280,6 +279,51 @@ class BriefingActivity : AppCompatActivity() {
         }
     }
 
+
+    private fun chooseTaskRecency() {
+        val prefs = MorningBriefing.prefs(this)
+        val saved = prefs.getInt("tasks_updated_days", 0)
+        var recentOnly = saved > 0
+        val body = UiComponents.column(this).apply {
+            val pad = UiStyle.dp(context, 20)
+            setPadding(pad, 0, pad, pad)
+        }
+        val daysBox = UiComponents.field(this, "Number of days", (saved.takeIf { it > 0 } ?: 2).toString(),
+            "1–365 days. Each day is a rolling 24-hour period.")
+        val days = daysBox.editText!!.apply { inputType = android.text.InputType.TYPE_CLASS_NUMBER }
+        daysBox.isEnabled = recentOnly
+        days.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { daysBox.error = null }
+            override fun afterTextChanged(s: android.text.Editable?) = Unit
+        })
+        UiComponents.add(body, label("Google provides the last update time, not the creation date. Editing an older task makes it recent again. This combines with your selected list and due-date filter."))
+        UiComponents.add(body, UiComponents.radioChoices(this,
+            listOf("All update times", "Only recently updated tasks"), if (recentOnly) 1 else 0) {
+            recentOnly = it == 1
+            daysBox.isEnabled = recentOnly
+        })
+        UiComponents.add(body, daysBox)
+        val dialog = com.google.android.material.dialog.MaterialAlertDialogBuilder(this).setTitle("Task recency")
+            .setView(ScrollView(this).apply { addView(body) })
+            .setPositiveButton("Apply", null).setNegativeButton("Cancel", null).create()
+        dialog.setOnShowListener {
+            dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val value = if (recentOnly) days.text.toString().toIntOrNull() else 0
+                if (value == null || (recentOnly && value !in 1..365)) {
+                    daysBox.error = "Enter a number from 1 to 365"
+                    days.requestFocus()
+                    return@setOnClickListener
+                }
+                stopService(Intent(this, BriefingService::class.java))
+                prefs.edit().putInt("tasks_updated_days", value)
+                    .putString("playback_status", "Task recency saved. Read a new briefing to hear it.")
+                    .remove("last_summary").remove("summary_at").apply()
+                dialog.dismiss()
+            }
+        }
+        dialog.show()
+    }
 
     private fun chooseTaskList() {
         val lists = BriefingTasks.cachedLists(this)

@@ -85,12 +85,22 @@ internal object BriefingSummary {
             .filter { item -> item.messages.any { BriefingFilters.allows(it, rules) } }
         val count = selected.size
         val intro = "$source, $count ${if (count == 1) "notification" else "notifications"} waiting."
-        if (mode == NotificationReadingMode.COUNT_ONLY || count == 0) return intro
-        val senders = selected.flatMap { it.messages }.filter { BriefingFilters.allows(it, rules) }
-            .map { it.sender.trim() }.filter { it.isNotEmpty() && !it.equals(source, ignoreCase = true) }
+        if (count == 0) return if (mode == NotificationReadingMode.SENDERS_ONLY)
+            "No $source notifications waiting." else intro
+        if (mode == NotificationReadingMode.COUNT_ONLY) return intro
+        val messages = selected.flatMap { it.messages }.filter { BriefingFilters.allows(it, rules) }
+        if (mode == NotificationReadingMode.COUNT_SENDERS_AND_PREVIEWS) {
+            val previews = messages.distinctBy { listOf(it.sender.trim().lowercase(Locale.ROOT), it.text, it.conversation) }
+            return "$intro " + previews.take(4).joinToString(". ") {
+                "${it.sender.trim().ifBlank { source }}: " + it.text.trim().take(180).ifBlank { "Preview unavailable" }
+            } + "." + if (previews.size > 4) " And ${previews.size - 4} more previews." else ""
+        }
+        val senders = messages.map { it.sender.trim() }
+            .filter { it.isNotEmpty() && !it.equals(source, ignoreCase = true) }
             .distinctBy { it.lowercase(Locale.ROOT) }
-        if (senders.isEmpty()) return "$intro Sender names are unavailable in these notifications."
-        return "$intro Senders. " + senders.take(10).joinToString(". ") + "." +
+        val prefix = if (mode == NotificationReadingMode.SENDERS_ONLY) "$source." else intro
+        if (senders.isEmpty()) return "$prefix Sender names are unavailable in these notifications."
+        return "$prefix Senders. " + senders.take(10).joinToString(". ") + "." +
             if (senders.size > 10) " And ${senders.size - 10} more senders." else ""
     }
 

@@ -20,6 +20,12 @@ internal data class TaskBriefing(val items: List<BriefingTask> = emptyList(), va
 
 internal object BriefingTasks {
     const val ALL_LISTS = "*"
+    fun updatedCutoff(now: Instant, days: Int): Instant? =
+        if (days <= 0) null else now.minusSeconds(days.coerceAtMost(365) * 86_400L)
+
+    fun updatedSince(updated: String, cutoff: Instant?): Boolean = cutoff == null ||
+        runCatching { !Instant.parse(updated).isBefore(cutoff) }.getOrDefault(false)
+
     val request: AuthorizationRequest
         get() = AuthorizationRequest.builder().setRequestedScopes(
             listOf(Scope("https://www.googleapis.com/auth/tasks.readonly"))).build()
@@ -55,6 +61,7 @@ internal object BriefingTasks {
         val prefs = MorningBriefing.prefs(c)
         val selectedId = prefs.getString("task_list_id", "").orEmpty()
         val dueOnly = prefs.getBoolean("tasks_due_only", false)
+        val cutoff = updatedCutoff(Instant.now(), prefs.getInt("tasks_updated_days", 0))
         val result = mutableListOf<BriefingTask>()
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(25)
         var requests = 0
@@ -95,13 +102,15 @@ internal object BriefingTasks {
             page = ""
             do {
                 val dueFilter = if (dueOnly) "&dueMin=${today}T00:00:00Z&dueMax=${today.plusDays(2)}T00:00:00Z" else ""
+                val updatedFilter = cutoff?.let { "&updatedMin=" + enc(it.toString()) }.orEmpty()
                 val response = get("lists/${enc(list.id)}/tasks?maxResults=100&showCompleted=false&showDeleted=false&showAssigned=true" +
-                    dueFilter + "&pageToken=" + enc(page))
+                    dueFilter + updatedFilter + "&pageToken=" + enc(page))
                 val items = response.optJSONArray("items")
                 for (j in 0 until (items?.length() ?: 0)) {
                     val item = items!!.getJSONObject(j)
                     val due = runCatching { LocalDate.parse(item.optString("due").take(10)) }.getOrNull()
                     if (item.optString("status") != "completed" && !item.optBoolean("deleted") &&
+                        updatedSince(item.optString("updated"), cutoff) &&
                         (!dueOnly || due == today || due == today.plusDays(1))) {
                         result.add(BriefingTask(item.optString("title", "Untitled task").take(180), due))
                     }
@@ -114,17 +123,17 @@ internal object BriefingTasks {
 
     fun summary(tasks: TaskBriefing, today: LocalDate): String {
         if (tasks.status.isNotEmpty()) return tasks.status
-        val intro = "From ${tasks.listTitle}, ${tasks.items.size} incomplete tasks. "
+        val intro = "From ${tasks.listTitle}, ${tasks.items.size} incomplete ${if (tasks.items.size == 1) "task" else "tasks"}. "
         if (tasks.items.isEmpty()) return intro.trim()
         return intro + tasks.items.take(10).joinToString(". ") {
             val date = when {
-                it.due == null -> "no due date"
+                it.due == null -> ""
                 it.due < today -> "overdue"
                 it.due == today -> "due today"
                 it.due == today.plusDays(1) -> "due tomorrow"
                 else -> "due ${it.due}"
             }
-            "${it.title}, $date"
+            if (date.isEmpty()) it.title else "${it.title}, $date"
         } + if (tasks.items.size > 10) ". And ${tasks.items.size - 10} more." else "."
     }
 }
