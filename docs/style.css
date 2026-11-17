@@ -1,0 +1,15 @@
+:root { color-scheme: light; font-family: Inter, "Segoe UI", sans-serif; color: #17392f; background: #f5f5ef; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { max-width: 780px; margin: 0 auto; padding: 64px 24px 48px; }
+h1 { font-size: clamp(2rem, 6vw, 3.5rem); line-height: 1.1; letter-spacing: -.04em; margin: 16px 0 24px; }
+h2 { font-size: 1.25rem; margin: 34px 0 12px; }
+p, li { font-size: 1.05rem; line-height: 1.75; }
+ul { padding-left: 24px; }
+a { color: #17644b; text-underline-offset: 4px; }
+a:focus-visible { outline: 3px solid #17644b; outline-offset: 5px; }
+.lead { font-size: 1.25rem; }
+nav { display: flex; flex-wrap: wrap; gap: 12px 24px; padding: 24px 0; border-bottom: 1px solid #cbd7cb; }
+footer { margin-top: 48px; padding-top: 24px; border-top: 1px solid #cbd7cb; font-size: .9rem; }
+small { color: #52695c; }
+code { overflow-wrap: anywhere; }
