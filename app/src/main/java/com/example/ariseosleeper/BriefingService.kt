@@ -22,6 +22,7 @@ class BriefingService : Service(), TextToSpeech.OnInitListener {
     private var generation = 0
     private var text: String? = null
     private var cutoff = 0L
+    private val timeout = Runnable { finishBriefing("Briefing timed out. You can try again in settings.") }
     private var focus: AudioFocusRequest? = null
     private var wake: PowerManager.WakeLock? = null
     private val monitor = object : Runnable {
@@ -54,7 +55,7 @@ class BriefingService : Service(), TextToSpeech.OnInitListener {
             return START_NOT_STICKY
         }
         if (active) return START_NOT_STICKY
-        if (!MorningBriefing.unlocked(this) || VerseAlarmStore.read(this).challenge != null) {
+        if (!MorningBriefing.storageAvailable(this) || VerseAlarmStore.read(this).challenge != null) {
             finishBriefing("Unlock the phone after completing the wake-up routine to hear the briefing.")
             return START_NOT_STICKY
         }
@@ -63,9 +64,9 @@ class BriefingService : Service(), TextToSpeech.OnInitListener {
         cutoff = System.currentTimeMillis()
         MorningBriefing.prefs(this).edit().putString("playback_status", "Preparing your briefing…").apply()
         wake = getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,
-            "AriseOSleeper:morningBriefing").apply { acquire(180_000) }
+            "AriseOSleeper:morningBriefing").apply { acquire(660_000) }
         handler.post(monitor)
-        handler.postDelayed({ finishBriefing("Briefing timed out. You can try again in settings.") }, 180_000)
+        handler.postDelayed(timeout, 45_000)
         tts = TextToSpeech(this, this)
         if (intent.action == "REPLAY") {
             cutoff = 0
@@ -113,6 +114,8 @@ class BriefingService : Service(), TextToSpeech.OnInitListener {
         val summary = text ?: return
         if (!ready || !active || speaking) return
         speaking = true
+        handler.removeCallbacks(timeout)
+        handler.postDelayed(timeout, (summary.length * 120L + 30_000).coerceIn(90_000L, 600_000L))
         val attrs = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
         focus = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)

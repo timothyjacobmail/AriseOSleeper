@@ -73,7 +73,7 @@ class BriefingActivity : AppCompatActivity() {
             })
         }
         add(label("Morning briefing", 26f))
-        add(label("After the final wake-up check, read one briefing each day. If the phone is locked, unlock it and return to the alarm within an hour to hear it."))
+        add(label("After the final wake-up check, read one briefing each day, including while the screen is locked. After restarting the phone, unlock it once so Android can make your personal data available."))
         toggle("Automatically read the morning briefing", "enabled")
         toggle("WhatsApp and WhatsApp Business", "WhatsApp")
         toggle("Gmail notification previews", "Gmail")

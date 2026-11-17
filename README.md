@@ -10,7 +10,7 @@ A standalone Android verse alarm app, extracted from Install Lock. Open this fol
 
 ## Morning briefing
 
-Open **Morning briefing** in alarm settings. After the final successful wake-up check, the app reads one briefing each local day. Unlock and return to the alarm within an hour if the routine finished while the phone was locked.
+Open **Morning briefing** in alarm settings. After the final successful wake-up check, the app reads one briefing each local day, including while the screen is locked. Android requires one unlock after restarting before personal data is available. If a routine finishes before that unlock, return to the alarm within an hour after unlocking to hear the pending briefing.
 
 - Allow notification access for WhatsApp, WhatsApp Business and Gmail previews. Collection starts after access is granted, keeps at most 500 deduplicated previews for up to 24 hours, and summarizes new previews since the last completed briefing within the previous 12 hours. These are received notification previews, not a verified unread inbox. Android may hide sensitive content.
 - Allow calendar access to read upcoming and ongoing events today and tomorrow from calendars synced to the phone, including recurring and all-day events.

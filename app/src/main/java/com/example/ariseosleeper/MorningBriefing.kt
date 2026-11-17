@@ -12,7 +12,8 @@ internal object MorningBriefing {
     fun prefs(c: Context) = c.getSharedPreferences("morning_briefing", Context.MODE_PRIVATE)
     fun enabled(c: Context) = prefs(c).getBoolean("enabled", true)
     fun allowed(c: Context, source: String) = enabled(c) && prefs(c).getBoolean(source, true)
-    fun unlocked(c: Context) = c.getSystemService(UserManager::class.java).isUserUnlocked &&
+    fun storageAvailable(c: Context) = c.getSystemService(UserManager::class.java).isUserUnlocked
+    fun unlocked(c: Context) = storageAvailable(c) &&
         !c.getSystemService(KeyguardManager::class.java).isDeviceLocked
 
     fun eligible(completedAt: Long, now: Long, lastDay: String): Boolean {
@@ -23,7 +24,7 @@ internal object MorningBriefing {
     }
 
     @Synchronized fun maybeStart(activity: Activity) {
-        if (!unlocked(activity) || !enabled(activity)) return
+        if (!storageAvailable(activity) || !enabled(activity)) return
         val state = VerseAlarmStore.read(activity)
         val id = state.completedRoutineId ?: return
         if (state.challenge != null) return
