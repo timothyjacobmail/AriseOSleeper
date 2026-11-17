@@ -22,6 +22,8 @@ Open **Morning briefing** in alarm settings. After the final successful wake-up 
 - Notification data and the generated summary stay in private app storage. No AI service receives them. Tasks sends an authorized request to Google only when preparing a briefing or checking the connection. Speech engines may use their own online voices depending on Android settings.
 - If a permission or connection is missing, the briefing says which source is unavailable. An active wake-up routine takes priority over briefing playback.
 
+See [the UI design decisions](docs/design.md) for component choices, save behavior, accessibility and visual verification.
+
 ## Build and test
 
 Configure the Android SDK in an untracked `local.properties` file. On Windows:

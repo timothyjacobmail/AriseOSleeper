@@ -2,7 +2,7 @@ package com.example.ariseosleeper
 
 import android.content.Context
 import android.content.res.ColorStateList
-import android.graphics.Color
+
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.StateListDrawable
@@ -14,7 +14,7 @@ import android.widget.EditText
 import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
-import androidx.core.graphics.ColorUtils
+
 import androidx.appcompat.R as AppCompatR
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.color.MaterialColors
@@ -31,7 +31,8 @@ internal object UiStyle {
 
     fun label(context: Context, text: String, size: Float = 16f) = TextView(context).apply {
         this.text = text
-        textSize = if (size >= 22f) 28f else size
+        textSize = size
+        isAccessibilityHeading = size >= 20f
         setTextColor(color(context, if (size >= 20f) MaterialR.attr.colorOnSurface else MaterialR.attr.colorOnSurfaceVariant))
         if (size >= 20f) typeface = Typeface.create(resources.getFont(R.font.inter), Typeface.BOLD)
         setLineSpacing(dp(context, 3).toFloat(), 1.05f)
@@ -49,7 +50,8 @@ internal object UiStyle {
     }
 
     fun button(context: Context, text: String, primary: Boolean = false, onClick: () -> Unit): MaterialButton =
-        MaterialButton(context, null, MaterialR.attr.materialButtonStyle).apply {
+        MaterialButton(context, null, if (primary) MaterialR.attr.materialButtonStyle
+            else MaterialR.attr.materialButtonOutlinedStyle).apply {
             this.text = text
             isAllCaps = false
             textSize = 14f
@@ -61,11 +63,7 @@ internal object UiStyle {
             insetBottom = dp(context, 3)
             cornerRadius = dp(context, 26)
             setPadding(dp(context, 20), dp(context, 10), dp(context, 20), dp(context, 10))
-            val fill = color(context, if (primary) AppCompatR.attr.colorPrimary else MaterialR.attr.colorSecondaryContainer)
-            val ink = color(context, if (primary) MaterialR.attr.colorOnPrimary else MaterialR.attr.colorOnSecondaryContainer)
-            val states = arrayOf(intArrayOf(-android.R.attr.state_enabled), intArrayOf())
-            backgroundTintList = ColorStateList(states, intArrayOf(ColorUtils.setAlphaComponent(fill, 90), fill))
-            setTextColor(ColorStateList(states, intArrayOf(ColorUtils.setAlphaComponent(ink, 100), ink)))
+            // Material styles own ripple, focus, disabled and contrast states in both themes.
             elevation = 0f
             stateListAnimator = null
             setOnClickListener { onClick() }
