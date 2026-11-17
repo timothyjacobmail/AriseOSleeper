@@ -74,6 +74,26 @@ internal object BriefingSummary {
             "." + if (selected.size > 4) " And ${selected.size - 4} more." else ""
     }
 
+    fun currentNotificationText(
+        notifications: List<BriefingActiveNotification>?,
+        source: String,
+        mode: NotificationReadingMode,
+        rules: List<BriefingFilter>
+    ): String {
+        if (notifications == null) return "$source notifications could not be checked. Check notification access in settings."
+        val selected = notifications.filter { it.app == source }
+            .filter { item -> item.messages.any { BriefingFilters.allows(it, rules) } }
+        val count = selected.size
+        val intro = "$source, $count ${if (count == 1) "notification" else "notifications"} waiting."
+        if (mode == NotificationReadingMode.COUNT_ONLY || count == 0) return intro
+        val senders = selected.flatMap { it.messages }.filter { BriefingFilters.allows(it, rules) }
+            .map { it.sender.trim() }.filter { it.isNotEmpty() && !it.equals(source, ignoreCase = true) }
+            .distinctBy { it.lowercase(Locale.ROOT) }
+        if (senders.isEmpty()) return "$intro Sender names are unavailable in these notifications."
+        return "$intro Senders. " + senders.take(10).joinToString(". ") + "." +
+            if (senders.size > 10) " And ${senders.size - 10} more senders." else ""
+    }
+
     fun build(c: Context, now: Long): String = buildString {
         append("Good morning. Here is your morning briefing. ")
         val p = MorningBriefing.prefs(c)
@@ -82,10 +102,15 @@ internal object BriefingSummary {
         BriefingMessages(c).use { store ->
             val rules = BriefingFilters.read(c)
             val messages = store.read(since, now).filter { BriefingFilters.allows(it, rules) }
+            val current = BriefingNotificationListener.currentNotifications()
             for (source in listOf("WhatsApp", "Gmail")) {
                 if (MorningBriefing.allowed(c, source)) {
-                    append(if (notificationsReady) messagesText(messages, source)
-                        else "$source notification access is off. Enable it in Morning briefing settings.")
+                    val mode = NotificationReadingMode.read(c, source)
+                    append(when {
+                        !notificationsReady -> "$source notification access is off. Enable it in Morning briefing settings."
+                        mode == NotificationReadingMode.PREVIEWS -> messagesText(messages, source)
+                        else -> currentNotificationText(current, source, mode, rules)
+                    })
                     append(" ")
                 }
             }

@@ -49,45 +49,68 @@ internal class BriefingMessages(c: Context) : SQLiteOpenHelper(c, "briefing_noti
     fun clear() { writableDatabase.delete("messages", null, null) }
 }
 
+internal data class BriefingActiveNotification(val app: String, val messages: List<BriefingMessage>)
+
 class BriefingNotificationListener : NotificationListenerService() {
+    companion object {
+        @Volatile private var connected: BriefingNotificationListener? = null
+        internal fun currentNotifications(): List<BriefingActiveNotification>? = try {
+            connected?.activeNotifications?.mapNotNull { sbn ->
+                val app = source(sbn.packageName) ?: return@mapNotNull null
+                if (sbn.notification.flags and (Notification.FLAG_GROUP_SUMMARY or Notification.FLAG_ONGOING_EVENT) != 0)
+                    return@mapNotNull null
+                BriefingActiveNotification(app, previews(sbn, app).map { it.first })
+            }
+        } catch (_: RuntimeException) { null }
+
+        private fun source(packageName: String): String? = when (packageName) {
+            "com.whatsapp", "com.whatsapp.w4b" -> "WhatsApp"
+            "com.google.android.gm" -> "Gmail"
+            else -> null
+        }
+        private fun previews(sbn: StatusBarNotification, source: String): List<Pair<BriefingMessage, Long>> {
+            val extras = sbn.notification.extras
+            val sender = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty().take(120)
+            val bundles = extras.getParcelableArray(Notification.EXTRA_MESSAGES)
+            val messages = if (bundles == null) emptyList()
+                else Notification.MessagingStyle.Message.getMessagesFromBundleArray(bundles)
+            if (messages.isNotEmpty()) return messages.takeLast(30).map {
+                BriefingMessage(source, it.senderPerson?.name?.toString()?.take(120) ?: sender,
+                    it.text?.toString().orEmpty().take(400), sender) to (it.timestamp.takeIf { at -> at > 0 } ?: sbn.postTime)
+            }
+            val text = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)
+                ?: extras.getCharSequence(Notification.EXTRA_TEXT)
+            return listOf(BriefingMessage(source, sender, text?.toString().orEmpty().take(400), sender) to sbn.postTime)
+        }
+    }
     private val store by lazy { BriefingMessages(this) }
     override fun onListenerConnected() {
+        connected = this
         activeNotifications?.forEach(::onNotificationPosted)
+    }
+    override fun onListenerDisconnected() {
+        if (connected === this) connected = null
+        super.onListenerDisconnected()
     }
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         if (!MorningBriefing.unlocked(this) && !getSystemService(android.os.UserManager::class.java).isUserUnlocked) return
-        val source = when (sbn.packageName) {
-            "com.whatsapp", "com.whatsapp.w4b" -> "WhatsApp"
-            "com.google.android.gm" -> "Gmail"
-            else -> return
-        }
+        val source = source(sbn.packageName) ?: return
         if (!MorningBriefing.allowed(this, source)) return
         val n = sbn.notification
         if (n.flags and Notification.FLAG_GROUP_SUMMARY != 0 || n.flags and Notification.FLAG_ONGOING_EVENT != 0) return
         try {
             val rules = BriefingFilters.read(this)
-            fun collect(from: String, body: String, at: Long, conversation: String) {
-                if (BriefingFilters.allows(BriefingMessage(source, from, body, conversation), rules))
-                    store.add(source, from, body, at, conversation)
-            }
-            val extras = n.extras
-            val sender = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()
-            val bundles = extras.getParcelableArray(Notification.EXTRA_MESSAGES)
-            val messages = if (bundles == null) emptyList()
-                else Notification.MessagingStyle.Message.getMessagesFromBundleArray(bundles)
-            if (messages.isNotEmpty()) {
-                messages.takeLast(30).forEach { msg ->
-                    collect(msg.senderPerson?.name?.toString() ?: sender,
-                        msg.text?.toString().orEmpty(), msg.timestamp.takeIf { it > 0 } ?: sbn.postTime, sender)
-                }
-            } else {
-                val text = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)
-                    ?: extras.getCharSequence(Notification.EXTRA_TEXT)
-                collect(sender, text?.toString().orEmpty(), sbn.postTime, sender)
+            for ((message, at) in previews(sbn, source)) {
+                if (BriefingFilters.allows(message, rules))
+                    store.add(source, message.sender, message.text, at, message.conversation)
             }
         } catch (_: RuntimeException) {
             // Malformed or redacted notifications must never disrupt the alarm.
         }
     }
-    override fun onDestroy() { store.close(); super.onDestroy() }
+    override fun onDestroy() {
+        if (connected === this) connected = null
+        store.close()
+        super.onDestroy()
+    }
 }

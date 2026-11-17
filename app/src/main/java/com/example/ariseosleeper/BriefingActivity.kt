@@ -24,6 +24,7 @@ class BriefingActivity : AppCompatActivity() {
     private var status: TextView? = null
     private var summary: TextView? = null
     private var taskListButton: Button? = null
+    private val notificationModeButtons = mutableMapOf<String, Button>()
     private var connecting = false
     private val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> runOnUiThread { updateStatus() } }
     private val calendar = registerForActivityResult(ActivityResultContracts.RequestPermission()) { render() }
@@ -78,6 +79,15 @@ class BriefingActivity : AppCompatActivity() {
         toggle("Automatically read the morning briefing", "enabled")
         toggle("WhatsApp and WhatsApp Business", "WhatsApp")
         toggle("Gmail notification previews", "Gmail")
+        notificationModeButtons.clear()
+        for (source in listOf("WhatsApp", "Gmail")) {
+            val readingButton = button("$source reading · ${NotificationReadingMode.read(this, source).label}") {
+                chooseNotificationMode(source)
+            }
+            notificationModeButtons[source] = readingButton
+            add(readingButton)
+        }
+        add(label("Count and sender-only modes use notifications currently in your notification tray. Apps can bundle several messages into one notification. Preview mode reads collected notifications from the briefing window."))
         toggle("Calendar events today and tomorrow", "calendar")
         toggle("Google Tasks from selected list", "tasks")
         add(CheckBox(this).apply {
@@ -130,6 +140,9 @@ class BriefingActivity : AppCompatActivity() {
             p.getString("playback_status", "Ready to prepare a briefing.")).joinToString("\n")
         summary?.text = p.getString("last_summary", "").orEmpty()
         taskListButton?.text = "Task list · " + p.getString("task_list_title", "immediate tasks")
+        notificationModeButtons.forEach { (source, button) ->
+            button.text = "$source reading · ${NotificationReadingMode.read(this, source).label}"
+        }
     }
     private fun startBriefing(action: String) {
         if (!MorningBriefing.unlocked(this)) return
@@ -177,6 +190,19 @@ class BriefingActivity : AppCompatActivity() {
             setTaskStatus(status)
         }
     }
+    private fun chooseNotificationMode(source: String) {
+        val modes = NotificationReadingMode.values().filter { source == "Gmail" || it != NotificationReadingMode.SENDERS_ONLY }
+        val current = NotificationReadingMode.read(this, source)
+        androidx.appcompat.app.AlertDialog.Builder(this).setTitle("$source reading")
+            .setSingleChoiceItems(modes.map { it.label }.toTypedArray(), modes.indexOf(current)) { dialog, index ->
+                stopService(Intent(this, BriefingService::class.java))
+                MorningBriefing.prefs(this).edit().putString("notification_mode_$source", modes[index].name)
+                    .putString("playback_status", "Reading options updated. Read a new briefing to apply them.")
+                    .remove("last_summary").remove("summary_at").apply()
+                dialog.dismiss()
+            }.setNegativeButton("Cancel", null).show()
+    }
+
     private fun chooseTaskList() {
         val lists = BriefingTasks.cachedLists(this)
         if (lists.isEmpty()) {
