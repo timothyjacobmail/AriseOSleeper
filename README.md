@@ -8,6 +8,17 @@ A standalone Android verse alarm app, extracted from Install Lock. Open this fol
 - Android SDK: compile API 37.1, target API 36, minimum API 30
 - No dependency on the Install Lock or Delayed Secrets projects
 
+## Morning briefing
+
+Open **Morning briefing** in alarm settings. After the final successful wake-up check, the app reads one briefing each local day. Unlock and return to the alarm within an hour if the routine finished while the phone was locked.
+
+- Allow notification access for WhatsApp, WhatsApp Business and Gmail previews. Collection starts after access is granted, keeps at most 500 deduplicated previews for up to 24 hours, and summarizes new previews since the last completed briefing within the previous 12 hours. These are received notification previews, not a verified unread inbox. Android may hide sensitive content.
+- Allow calendar access to read upcoming and ongoing events today and tomorrow from calendars synced to the phone, including recurring and all-day events.
+- **Connect Google Tasks** requests only read-only task access and checks incomplete tasks due today or tomorrow across task lists. Enable Google Tasks API and create an Android OAuth client for the package and signing SHA-1 displayed in **Google Tasks setup help**. Configure the consent screen and test users as required. Maps demo keys cannot authorize Tasks. Reconnect if Google authorization expires.
+- **Read briefing now**, **Replay last briefing**, and **Stop reading** control speech. Speech uses Android text-to-speech and media volume. Replay uses the saved text without fetching Tasks again.
+- Notification data and the generated summary stay in private app storage. No AI service receives them. Tasks sends an authorized request to Google only when preparing a briefing or checking the connection. Speech engines may use their own online voices depending on Android settings.
+- If a permission or connection is missing, the briefing says which source is unavailable. An active wake-up routine takes priority over briefing playback.
+
 ## Build and test
 
 Configure the Android SDK in an untracked `local.properties` file. On Windows:

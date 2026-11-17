@@ -95,6 +95,7 @@ class VerseAlarmActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         VerseAlarmScheduler.sync(this)
+        MorningBriefing.maybeStart(this)
         if (VerseAlarmStore.read(this).challenge == null && practice == null) rendered = ""
         handler.removeCallbacks(tick)
         handler.post(tick)
@@ -326,6 +327,10 @@ class VerseAlarmActivity : AppCompatActivity() {
                 attempt {
                     if (VerseAlarmStore.answer(this, ch.id, value, dictatedText == value)) {
                         toast(if (ch.round + 1 >= s.config.sessions) "Wake-up routine complete." else "Verse complete. Your next check is in five minutes.")
+                        if (ch.round + 1 >= s.config.sessions) {
+                            VerseAlarmScheduler.sync(this)
+                            MorningBriefing.maybeStart(this)
+                        }
                     } else {
                         result.text = "That does not match yet. Check the words and their order, then try again."
                         return@attempt
@@ -414,6 +419,7 @@ class VerseAlarmActivity : AppCompatActivity() {
             if (checked) AlarmSetup.missing(this).firstOrNull()?.let(::requestAlarmSetup)
         }
         val views = mutableListOf<View>(label(getString(R.string.app_name), 26f), status!!,
+            button("Morning briefing") { startActivity(Intent(this, BriefingActivity::class.java)) },
             label("Learn a passage with its text visible, then write or recite it from memory. Each verse has its own count. Choose the number of sessions (verse checks) per alarm, five minutes apart. A one-minute warning lets you finish each verse before the alarm rings."),
             label("Daily times follow your phone's time zone. Settings changes save immediately when no wake-up routine is running. During a routine, changes have a 15-minute wait and cannot end the current routine. The wait ends when all checks are complete."),
             LinearLayout(this).apply {
@@ -517,6 +523,7 @@ class VerseAlarmActivity : AppCompatActivity() {
         views.add(button(if (s.challenge != null) "Back to wake-up check" else "Close app") {
             if (s.challenge != null) { editingSettings = false; rendered = ""; refresh() } else finish()
         })
+        // Briefing controls appear at the top of settings.
         show(views)
     }
     private fun openSetting(intent: Intent) {

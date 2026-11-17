@@ -8,7 +8,8 @@ import java.util.UUID
 internal data class VerseAlarmState(val config: VerseAlarmConfig = VerseAlarmConfig(),
     val verses: List<AlarmVerse> = emptyList(), val challenge: VerseChallenge? = null,
     val nextAlarm: Long = 0, val pending: VerseAlarmConfig? = null,
-    val countdown: AlarmChangeCountdown? = null, val everArmed: Boolean = false) {
+    val countdown: AlarmChangeCountdown? = null, val everArmed: Boolean = false,
+    val completedRoutineId: String? = null, val completedRoutineAt: Long = 0) {
     fun requestConfig(config: VerseAlarmConfig, now: AlarmClockSnapshot): VerseAlarmState =
         if (challenge == null) copy(config = config, everArmed = everArmed || config.enabled,
             pending = null, countdown = null,
@@ -68,11 +69,13 @@ internal object VerseAlarmStore {
             AlarmChangeCountdown(it.getLong("due"), it.getInt("boot"), it.getLong("duration")) }
         return VerseAlarmState(config(o.getJSONObject("config")), verses, challenge,
             o.getLong("nextAlarm"), o.optJSONObject("pending")?.let(::config), countdown,
-            o.optBoolean("everArmed"))
+            o.optBoolean("everArmed"), o.optString("completedRoutineId").takeIf { it.isNotEmpty() },
+            o.optLong("completedRoutineAt"))
     }
 
     private fun write(c: Context, s: VerseAlarmState) {
         val o = JSONObject().put("config", encode(s.config)).put("nextAlarm", s.nextAlarm)
+            .put("completedRoutineId", s.completedRoutineId).put("completedRoutineAt", s.completedRoutineAt)
             .put("everArmed", s.everArmed).put("verses", JSONArray().apply {
                 s.verses.forEach { put(JSONObject().put("id", it.id).put("reference", it.reference)
                     .put("text", it.text).put("successes", it.successes).put("lastUsed", it.lastUsed)
@@ -168,7 +171,10 @@ internal object VerseAlarmStore {
         if (!VerseAlarmRules.matches(verse.text, answer, dictated)) return false
         val updated = s.copy(verses = s.verses.map { if (it.id != verse.id) it else
             it.copy(successes = (it.successes + 1).coerceAtMost(1_000_000), lastUsed = now.wall) })
-        write(c, updated.copy(challenge = if (ch.round + 1 >= s.config.sessions) null
+        val finished = ch.round + 1 >= s.config.sessions
+        write(c, updated.copy(completedRoutineId = if (finished) ch.id else s.completedRoutineId,
+            completedRoutineAt = if (finished) now.wall else s.completedRoutineAt,
+            challenge = if (finished) null
             else challenge(updated, ch.round + 1, now)).applyPendingIfIdle(now))
         return true
     }
