@@ -23,6 +23,7 @@ class BriefingActivity : AppCompatActivity() {
     private val worker = Executors.newSingleThreadExecutor()
     private var status: TextView? = null
     private var summary: TextView? = null
+    private var taskListButton: Button? = null
     private var connecting = false
     private val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> runOnUiThread { updateStatus() } }
     private val calendar = registerForActivityResult(ActivityResultContracts.RequestPermission()) { render() }
@@ -67,8 +68,8 @@ class BriefingActivity : AppCompatActivity() {
                 this.text = text
                 isChecked = prefs.getBoolean(key, true)
                 setOnCheckedChangeListener { _, checked ->
-                    prefs.edit().putBoolean(key, checked).apply()
-                    if (key == "enabled" && !checked) stopService(Intent(this@BriefingActivity, BriefingService::class.java))
+                    stopService(Intent(this@BriefingActivity, BriefingService::class.java))
+                    prefs.edit().putBoolean(key, checked).remove("last_summary").remove("summary_at").apply()
                 }
             })
         }
@@ -78,7 +79,18 @@ class BriefingActivity : AppCompatActivity() {
         toggle("WhatsApp and WhatsApp Business", "WhatsApp")
         toggle("Gmail notification previews", "Gmail")
         toggle("Calendar events today and tomorrow", "calendar")
-        toggle("Google Tasks due today and tomorrow", "tasks")
+        toggle("Google Tasks from selected list", "tasks")
+        add(CheckBox(this).apply {
+            text = "Only tasks due today or tomorrow"
+            isChecked = prefs.getBoolean("tasks_due_only", false)
+            setOnCheckedChangeListener { _, checked ->
+                stopService(Intent(this@BriefingActivity, BriefingService::class.java))
+                prefs.edit().putBoolean("tasks_due_only", checked).remove("last_summary").remove("summary_at").apply()
+            }
+        })
+        taskListButton = button("Task list · " + prefs.getString("task_list_title", "immediate tasks")) { chooseTaskList() }
+        add(taskListButton!!)
+        add(button("Notification filters") { BriefingFilterEditor.show(this) })
         add(label("Notification previews are stored locally. Previews older than 24 hours are cleared during collection or briefing. Each briefing covers new previews since the last completed briefing, up to the past 12 hours. It reads up to four recent previews per app. Android may hide sensitive previews."))
         val access = packageName in NotificationManagerCompat.getEnabledListenerPackages(this)
         add(button(if (access) "Notification access enabled" else "Allow WhatsApp and Gmail notification access") {
@@ -117,6 +129,7 @@ class BriefingActivity : AppCompatActivity() {
         status?.text = listOf(p.getString("tasks_status", "Google Tasks is not connected."),
             p.getString("playback_status", "Ready to prepare a briefing.")).joinToString("\n")
         summary?.text = p.getString("last_summary", "").orEmpty()
+        taskListButton?.text = "Task list · " + p.getString("task_list_title", "immediate tasks")
     }
     private fun startBriefing(action: String) {
         if (!MorningBriefing.unlocked(this)) return
@@ -154,15 +167,36 @@ class BriefingActivity : AppCompatActivity() {
         setTaskStatus("Checking Google Tasks…")
         worker.execute {
             val status = try {
-                val items = BriefingTasks.download(token)
+                val items = BriefingTasks.download(this, token)
                 MorningBriefing.prefs(this).edit().putBoolean("tasks_connected", true).apply()
-                "Google Tasks connected. ${items.items.size} incomplete tasks due today or tomorrow."
+                items.status.ifEmpty { "Google Tasks connected. ${items.items.size} incomplete tasks in ${items.listTitle}." }
             } catch (e: Exception) {
                 // Only our HTTP/status messages may be displayed, never auth tokens or responses.
                 if (e is IllegalStateException) e.message.orEmpty() else "Google Tasks could not be read. Check your connection and setup help."
             }
             setTaskStatus(status)
         }
+    }
+    private fun chooseTaskList() {
+        val lists = BriefingTasks.cachedLists(this)
+        if (lists.isEmpty()) {
+            Toast.makeText(this, "Refreshing your task lists. Tap Task list again after the connection check.", Toast.LENGTH_LONG).show()
+            connectTasks()
+            return
+        }
+        val choices = listOf(BriefingTaskList(BriefingTasks.ALL_LISTS, "All task lists")) + lists
+        val prefs = MorningBriefing.prefs(this)
+        val selected = prefs.getString("task_list_id", "").orEmpty()
+        val index = choices.indexOfFirst { it.id == selected }
+        androidx.appcompat.app.AlertDialog.Builder(this).setTitle("Read tasks from")
+            .setSingleChoiceItems(choices.map { it.title }.toTypedArray(), index) { dialog, which ->
+                val list = choices[which]
+                stopService(Intent(this, BriefingService::class.java))
+                prefs.edit().putString("task_list_id", list.id).putString("task_list_title", list.title)
+                    .remove("last_summary").remove("summary_at").apply()
+                dialog.dismiss()
+            }.setNegativeButton("Cancel", null)
+            .setNeutralButton("Refresh lists") { _, _ -> connectTasks() }.show()
     }
     @Suppress("DEPRECATION")
     private fun showTasksHelp() {

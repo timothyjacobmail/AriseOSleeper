@@ -80,7 +80,8 @@ internal object BriefingSummary {
         val notificationsReady = c.packageName in NotificationManagerCompat.getEnabledListenerPackages(c)
         val since = maxOf(p.getLong("notifications_through", 0), now - 12 * 3_600_000)
         BriefingMessages(c).use { store ->
-            val messages = store.read(since, now)
+            val rules = BriefingFilters.read(c)
+            val messages = store.read(since, now).filter { BriefingFilters.allows(it, rules) }
             for (source in listOf("WhatsApp", "Gmail")) {
                 if (MorningBriefing.allowed(c, source)) {
                     append(if (notificationsReady) messagesText(messages, source)
@@ -97,18 +98,8 @@ internal object BriefingSummary {
         }
         if (MorningBriefing.allowed(c, "tasks")) {
             val tasks = BriefingTasks.fetch(c)
-            if (tasks.status.isNotEmpty()) append(tasks.status)
-            else {
-                val today = Instant.ofEpochMilli(now).atZone(ZoneId.systemDefault()).toLocalDate()
-                for (offset in 0L..1L) {
-                    val due = tasks.items.filter { it.due == today.plusDays(offset) }
-                    val label = if (offset == 0L) "Today" else "Tomorrow"
-                    append("$label, ${due.size} incomplete tasks due. ")
-                    append(due.take(6).joinToString(". ") { it.title })
-                    if (due.isNotEmpty()) append(". ")
-                    if (due.size > 6) append("And ${due.size - 6} more. ")
-                }
-            }
+            val today = Instant.ofEpochMilli(now).atZone(ZoneId.systemDefault()).toLocalDate()
+            append(BriefingTasks.summary(tasks, today))
         }
         append(" That is your briefing.")
     }

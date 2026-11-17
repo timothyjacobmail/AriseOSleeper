@@ -6,6 +6,7 @@ import com.google.android.gms.auth.api.identity.Identity
 import com.google.android.gms.common.api.Scope
 import com.google.android.gms.tasks.Tasks
 import org.json.JSONObject
+import org.json.JSONArray
 import java.net.URL
 import java.net.URLEncoder
 import java.time.LocalDate
@@ -13,13 +14,26 @@ import java.time.Instant
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.HttpsURLConnection
 
-internal data class BriefingTask(val title: String, val due: LocalDate)
-internal data class TaskBriefing(val items: List<BriefingTask> = emptyList(), val status: String = "")
+internal data class BriefingTask(val title: String, val due: LocalDate?)
+internal data class BriefingTaskList(val id: String, val title: String)
+internal data class TaskBriefing(val items: List<BriefingTask> = emptyList(), val status: String = "", val listTitle: String = "")
 
 internal object BriefingTasks {
+    const val ALL_LISTS = "*"
     val request: AuthorizationRequest
         get() = AuthorizationRequest.builder().setRequestedScopes(
             listOf(Scope("https://www.googleapis.com/auth/tasks.readonly"))).build()
+
+    fun selectLists(lists: List<BriefingTaskList>, id: String): List<BriefingTaskList> = when (id) {
+        ALL_LISTS -> lists
+        "" -> lists.filter { it.title.trim().equals("immediate tasks", ignoreCase = true) }
+        else -> lists.filter { it.id == id }
+    }
+
+    fun cachedLists(c: Context): List<BriefingTaskList> {
+        val array = JSONArray(MorningBriefing.prefs(c).getString("task_lists", "[]"))
+        return (0 until array.length()).map { array.getJSONObject(it).let { o -> BriefingTaskList(o.getString("id"), o.getString("title")) } }
+    }
 
     fun fetch(c: Context): TaskBriefing {
         if (!MorningBriefing.prefs(c).getBoolean("tasks_connected", false))
@@ -28,20 +42,24 @@ internal object BriefingTasks {
             val auth = Tasks.await(Identity.getAuthorizationClient(c).authorize(request), 10, TimeUnit.SECONDS)
             if (auth.hasResolution() || auth.accessToken.isNullOrBlank())
                 TaskBriefing(status = "Google Tasks needs reconnection in Morning briefing settings.")
-            else download(auth.accessToken!!).also {
+            else download(c, auth.accessToken!!).also {
                 MorningBriefing.prefs(c).edit().putString("tasks_status",
-                    "Connected. Checked " + Instant.now().toString()).apply()
+                    it.status.ifEmpty { "Connected. Checked " + Instant.now().toString() }).apply()
             }
         } catch (_: Exception) {
             TaskBriefing(status = "Google Tasks could not be checked. Try Connect Google Tasks in settings.")
         }
     }
 
-    fun download(token: String, today: LocalDate = LocalDate.now()): TaskBriefing {
+    fun download(c: Context, token: String, today: LocalDate = LocalDate.now()): TaskBriefing {
+        val prefs = MorningBriefing.prefs(c)
+        val selectedId = prefs.getString("task_list_id", "").orEmpty()
+        val dueOnly = prefs.getBoolean("tasks_due_only", false)
         val result = mutableListOf<BriefingTask>()
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(25)
+        var requests = 0
         fun get(path: String): JSONObject {
-            check(System.nanoTime() < deadline) { "Tasks request timed out." }
+            check(++requests <= 100 && System.nanoTime() < deadline) { "Tasks request limit reached. Try again." }
             val con = URL("https://tasks.googleapis.com/tasks/v1/$path").openConnection() as HttpsURLConnection
             try {
                 con.connectTimeout = 4000
@@ -53,32 +71,60 @@ internal object BriefingTasks {
             } finally { con.disconnect() }
         }
         fun enc(s: String) = URLEncoder.encode(s, "UTF-8")
-        var listsPage = ""
-        var requests = 0
+        var page = ""
+        val lists = mutableListOf<BriefingTaskList>()
         do {
-            val lists = get("users/@me/lists?maxResults=100&pageToken=" + enc(listsPage))
-            val entries = lists.optJSONArray("items")
-            for (i in 0 until (entries?.length() ?: 0)) {
-                val id = entries!!.getJSONObject(i).getString("id")
-                var page = ""
-                do {
-                    check(++requests <= 100) { "Too many task pages. Briefing could not check every list." }
-                    val response = get("lists/${enc(id)}/tasks?maxResults=100&showCompleted=false&showDeleted=false" +
-                        "&showAssigned=true&dueMin=${today}T00:00:00Z&dueMax=${today.plusDays(2)}T00:00:00Z&pageToken=" + enc(page))
-                    val items = response.optJSONArray("items")
-                    for (j in 0 until (items?.length() ?: 0)) {
-                        val item = items!!.getJSONObject(j)
-                        val due = runCatching { LocalDate.parse(item.optString("due").take(10)) }.getOrNull()
-                        if (due != null && (due == today || due == today.plusDays(1)) &&
-                            item.optString("status") != "completed" && !item.optBoolean("deleted")) {
-                            result.add(BriefingTask(item.optString("title", "Untitled task").take(180), due))
-                        }
-                    }
-                    page = response.optString("nextPageToken")
-                } while (page.isNotEmpty())
+            val response = get("users/@me/lists?maxResults=100&pageToken=" + enc(page))
+            val entries = response.optJSONArray("items")
+            for (i in 0 until (entries?.length() ?: 0)) entries!!.getJSONObject(i).let {
+                lists.add(BriefingTaskList(it.getString("id"), it.optString("title", "Untitled list")))
             }
-            listsPage = lists.optString("nextPageToken")
-        } while (listsPage.isNotEmpty())
-        return TaskBriefing(result.sortedBy { it.due })
+            page = response.optString("nextPageToken")
+        } while (page.isNotEmpty())
+        prefs.edit().putString("task_lists", JSONArray().apply {
+            lists.forEach { put(JSONObject().put("id", it.id).put("title", it.title)) }
+        }.toString()).apply()
+        val selected = selectLists(lists, selectedId)
+        if (selected.isEmpty()) return TaskBriefing(status = "The selected Tasks list was not found. Choose a task list in Morning briefing settings.")
+        if (selectedId.isEmpty() && selected.size > 1)
+            return TaskBriefing(status = "More than one list is named immediate tasks. Choose a task list in settings.")
+        val listTitle = if (selectedId == ALL_LISTS) "all task lists" else selected.single().title
+        prefs.edit().putString("task_list_title", listTitle).apply()
+        if (selectedId.isEmpty()) prefs.edit().putString("task_list_id", selected.single().id).apply()
+        for (list in selected) {
+            page = ""
+            do {
+                val dueFilter = if (dueOnly) "&dueMin=${today}T00:00:00Z&dueMax=${today.plusDays(2)}T00:00:00Z" else ""
+                val response = get("lists/${enc(list.id)}/tasks?maxResults=100&showCompleted=false&showDeleted=false&showAssigned=true" +
+                    dueFilter + "&pageToken=" + enc(page))
+                val items = response.optJSONArray("items")
+                for (j in 0 until (items?.length() ?: 0)) {
+                    val item = items!!.getJSONObject(j)
+                    val due = runCatching { LocalDate.parse(item.optString("due").take(10)) }.getOrNull()
+                    if (item.optString("status") != "completed" && !item.optBoolean("deleted") &&
+                        (!dueOnly || due == today || due == today.plusDays(1))) {
+                        result.add(BriefingTask(item.optString("title", "Untitled task").take(180), due))
+                    }
+                }
+                page = response.optString("nextPageToken")
+            } while (page.isNotEmpty())
+        }
+        return TaskBriefing(result.sortedWith(compareBy<BriefingTask> { it.due == null }.thenBy { it.due }), listTitle = listTitle)
+    }
+
+    fun summary(tasks: TaskBriefing, today: LocalDate): String {
+        if (tasks.status.isNotEmpty()) return tasks.status
+        val intro = "From ${tasks.listTitle}, ${tasks.items.size} incomplete tasks. "
+        if (tasks.items.isEmpty()) return intro.trim()
+        return intro + tasks.items.take(10).joinToString(". ") {
+            val date = when {
+                it.due == null -> "no due date"
+                it.due < today -> "overdue"
+                it.due == today -> "due today"
+                it.due == today.plusDays(1) -> "due tomorrow"
+                else -> "due ${it.due}"
+            }
+            "${it.title}, $date"
+        } + if (tasks.items.size > 10) ". And ${tasks.items.size - 10} more." else "."
     }
 }

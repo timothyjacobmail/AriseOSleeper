@@ -9,23 +9,26 @@ import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import java.security.MessageDigest
 
-internal data class BriefingMessage(val app: String, val sender: String, val text: String)
+internal data class BriefingMessage(val app: String, val sender: String, val text: String, val conversation: String = "")
 
-internal class BriefingMessages(c: Context) : SQLiteOpenHelper(c, "briefing_notifications.db", null, 1) {
+internal class BriefingMessages(c: Context) : SQLiteOpenHelper(c, "briefing_notifications.db", null, 2) {
     override fun onCreate(db: SQLiteDatabase) {
-        db.execSQL("CREATE TABLE messages (digest TEXT PRIMARY KEY, app TEXT NOT NULL, sender TEXT NOT NULL, body TEXT NOT NULL, received INTEGER NOT NULL)")
+        db.execSQL("CREATE TABLE messages (digest TEXT PRIMARY KEY, app TEXT NOT NULL, sender TEXT NOT NULL, body TEXT NOT NULL, received INTEGER NOT NULL, conversation TEXT NOT NULL DEFAULT '')")
     }
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) db.execSQL("ALTER TABLE messages ADD COLUMN conversation TEXT NOT NULL DEFAULT ''")
+    }
 
-    @Synchronized fun add(app: String, sender: String, body: String, at: Long) {
+    @Synchronized fun add(app: String, sender: String, body: String, at: Long, conversation: String = "") {
         val text = body.replace(Regex("\\s+"), " ").trim().take(400)
         if (text.isBlank()) return
         val from = sender.replace(Regex("\\s+"), " ").trim().take(120)
         // Content hashes collapse reposts/group expansions. No notification content is logged.
-        val hash = MessageDigest.getInstance("SHA-256").digest("$app|$from|$text".toByteArray())
+        val hash = MessageDigest.getInstance("SHA-256").digest("$app|$from|$text|${conversation.take(120)}".toByteArray())
             .joinToString("") { "%02x".format(it) }
         val values = ContentValues().apply {
             put("digest", hash); put("app", app); put("sender", from); put("body", text); put("received", at)
+            put("conversation", conversation.take(120))
         }
         writableDatabase.beginTransaction()
         try {
@@ -37,10 +40,10 @@ internal class BriefingMessages(c: Context) : SQLiteOpenHelper(c, "briefing_noti
     }
     @Synchronized fun read(since: Long, through: Long): List<BriefingMessage> {
         writableDatabase.delete("messages", "received < ?", arrayOf((System.currentTimeMillis() - 86_400_000).toString()))
-        return readableDatabase.query("messages", arrayOf("app", "sender", "body"),
+        return readableDatabase.query("messages", arrayOf("app", "sender", "body", "conversation"),
             "received > ? AND received <= ?", arrayOf(since.toString(), through.toString()),
             null, null, "received DESC").use { cursor ->
-            buildList { while (cursor.moveToNext()) add(BriefingMessage(cursor.getString(0), cursor.getString(1), cursor.getString(2))) }
+            buildList { while (cursor.moveToNext()) add(BriefingMessage(cursor.getString(0), cursor.getString(1), cursor.getString(2), cursor.getString(3))) }
         }
     }
     fun clear() { writableDatabase.delete("messages", null, null) }
@@ -62,6 +65,11 @@ class BriefingNotificationListener : NotificationListenerService() {
         val n = sbn.notification
         if (n.flags and Notification.FLAG_GROUP_SUMMARY != 0 || n.flags and Notification.FLAG_ONGOING_EVENT != 0) return
         try {
+            val rules = BriefingFilters.read(this)
+            fun collect(from: String, body: String, at: Long, conversation: String) {
+                if (BriefingFilters.allows(BriefingMessage(source, from, body, conversation), rules))
+                    store.add(source, from, body, at, conversation)
+            }
             val extras = n.extras
             val sender = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()
             val bundles = extras.getParcelableArray(Notification.EXTRA_MESSAGES)
@@ -69,13 +77,13 @@ class BriefingNotificationListener : NotificationListenerService() {
                 else Notification.MessagingStyle.Message.getMessagesFromBundleArray(bundles)
             if (messages.isNotEmpty()) {
                 messages.takeLast(30).forEach { msg ->
-                    store.add(source, msg.senderPerson?.name?.toString() ?: sender,
-                        msg.text?.toString().orEmpty(), msg.timestamp.takeIf { it > 0 } ?: sbn.postTime)
+                    collect(msg.senderPerson?.name?.toString() ?: sender,
+                        msg.text?.toString().orEmpty(), msg.timestamp.takeIf { it > 0 } ?: sbn.postTime, sender)
                 }
             } else {
                 val text = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)
                     ?: extras.getCharSequence(Notification.EXTRA_TEXT)
-                store.add(source, sender, text?.toString().orEmpty(), sbn.postTime)
+                collect(sender, text?.toString().orEmpty(), sbn.postTime, sender)
             }
         } catch (_: RuntimeException) {
             // Malformed or redacted notifications must never disrupt the alarm.
