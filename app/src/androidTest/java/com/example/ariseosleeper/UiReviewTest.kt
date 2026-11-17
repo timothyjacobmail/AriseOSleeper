@@ -13,7 +13,7 @@ import android.widget.EditText
 import android.widget.RadioButton
 import android.widget.TextView
 import androidx.test.core.app.ActivityScenario
-import androidx.test.espresso.Espresso
+
 import androidx.test.platform.app.InstrumentationRegistry
 import com.google.android.material.checkbox.MaterialCheckBox
 import com.google.android.material.materialswitch.MaterialSwitch
@@ -105,28 +105,40 @@ class UiReviewTest {
                     assertEquals(4, all.filterIsInstance<MaterialCheckBox>().size)
                 }
                 screenshot("briefing")
-                reveal("Gmail reading\nMessage previews")
+                val defaultReading = NotificationReadingOptions().label
+                fun part(title: String) = views().filterIsInstance<MaterialCheckBox>().last { it.text.toString() == title }
+                fun namesOnly() {
+                    part("Notification count").performClick()
+                    part("Message previews").performClick()
+                    views().filterIsInstance<RadioButton>().last { it.text.toString() == "Waiting notifications" }.performClick()
+                }
+                reveal("Gmail reading\n$defaultReading")
                 screenshot("notifications")
-                click("Gmail reading\nMessage previews")
-                main { views().filterIsInstance<RadioButton>().last { it.text.startsWith("Sender names only") }.performClick() }
+                click("Gmail reading\n$defaultReading")
+                main { namesOnly() }
                 screenshot("reading-choice")
                 click("Cancel")
-                assertEquals(NotificationReadingMode.PREVIEWS, NotificationReadingMode.read(context, "Gmail"))
-                click("Gmail reading\nMessage previews")
-                main { views().filterIsInstance<RadioButton>().last { it.text.startsWith("Sender names only") }.performClick() }
+                assertEquals(NotificationReadingOptions(), NotificationReadingOptions.read(context, "Gmail"))
+                click("Gmail reading\n$defaultReading")
+                main { namesOnly() }
                 click("Apply")
-                assertEquals(NotificationReadingMode.SENDERS_ONLY, NotificationReadingMode.read(context, "Gmail"))
-                reveal("WhatsApp reading\nMessage previews")
-                click("WhatsApp reading\nMessage previews")
+                assertEquals(NotificationReadingOptions(false, true, false, false), NotificationReadingOptions.read(context, "Gmail"))
+                reveal("WhatsApp reading\n$defaultReading")
+                click("WhatsApp reading\n$defaultReading")
                 main {
-                    val radios = views().filterIsInstance<RadioButton>().filter { it.isShown }
-                    assertEquals(5, radios.size)
-                    radios.last { it.text.startsWith("Count + sender names + previews") }.performClick()
+                    part("Notification count").performClick()
+                    part("Sender names").performClick()
+                    part("Message previews").performClick()
+                    val apply = views().filterIsInstance<TextView>().last { it.text.toString() == "Apply" && it.isShown }
+                    assertFalse(apply.isEnabled)
+                    part("Sender names").performClick()
+                    part("Message previews").performClick()
+                    assertTrue(apply.isEnabled)
+                    views().filterIsInstance<RadioButton>().last { it.text.toString() == "Waiting notifications" }.performClick()
                 }
-                reveal("Count + sender names + previews\nWaiting notification count and up to four previews with their sender names")
-                screenshot("notification-combinations")
+                screenshot("notification-multi-select")
                 click("Apply")
-                assertEquals(NotificationReadingMode.COUNT_SENDERS_AND_PREVIEWS, NotificationReadingMode.read(context, "WhatsApp"))
+                assertEquals(NotificationReadingOptions(false, true, true, false), NotificationReadingOptions.read(context, "WhatsApp"))
                 reveal("Task list\nImmediate tasks")
                 screenshot("tasks")
                 click("Task list\nImmediate tasks")
@@ -169,7 +181,11 @@ class UiReviewTest {
                     assertTrue(views().filterIsInstance<TextView>().any { it.text.toString() == "Enter text to match" })
                     views().filterIsInstance<EditText>().last { it.hint == "Sender, group name or keyword" }.setText("Promotions")
                 }
-                Espresso.closeSoftKeyboard()
+                main {
+                    val field = views().filterIsInstance<EditText>().last { it.hint == "Sender, group name or keyword" }
+                    field.context.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+                        .hideSoftInputFromWindow(field.windowToken, 0)
+                }
                 click("Save")
                 assertEquals("Promotions", BriefingFilters.read(context).single().pattern)
                 screenshot("filter-saved")

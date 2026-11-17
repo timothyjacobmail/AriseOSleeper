@@ -11,7 +11,8 @@ Evaluate selection versus action, label length, comparison needs, available spac
 | Enable morning briefing or a filter | Material switch | An independent on/off setting that saves immediately. The briefing master controls collection and playback as well as the daily automatic run. |
 | Include several briefing sources | Material checkboxes | WhatsApp, Gmail, Calendar and Tasks are independent members of a set. Changes save immediately. |
 | Enable daily alarms | Material checkbox within the alarm form | Part of a draft, explicitly committed with Save along with times and session counts. Do not imply an immediate switch action. |
-| Choose a notification reading style | Radio rows in a Material dialog | Mutually exclusive alternatives benefit from visible explanations. Apply commits, Cancel preserves the previous choice. Long labels wrap rather than squeeze into segments. |
+| Choose notification content | Independent Material checkboxes in a dialog | Count, sender names and previews can be combined freely. Require at least one part. Apply commits all parts, Cancel preserves the previous selection. |
+| Choose notifications to summarize | Radio rows, separate from content checkboxes | Waiting cards and the collected briefing window are mutually exclusive sources. Keep this choice independent of the spoken parts and preserve existing users’ source selection. |
 | Choose filter action, target field or match type | Visible radio rows | Alternatives need comparison while composing the rule. Save commits the entire rule. |
 | Choose an app for a filter | Read-only exposed dropdown | Familiar short app names require little comparison and fit compactly within the longer form. |
 | Choose a Google Tasks list | Searchable, single-selection list in a dialog | User-created names can be long and the list can grow. Search by name, retain stable list IDs, Apply to commit and Cancel to discard. |

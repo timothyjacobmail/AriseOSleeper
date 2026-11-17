@@ -66,42 +66,55 @@ internal object BriefingSummary {
         }
     }
 
-    fun messagesText(messages: List<BriefingMessage>, source: String): String {
+    fun messagesText(
+        messages: List<BriefingMessage>, source: String,
+        options: NotificationReadingOptions = NotificationReadingOptions()
+    ): String {
         val selected = messages.filter { it.app == source }
-        if (selected.isEmpty()) return "No collected $source notifications in the briefing window."
-        return "$source, ${selected.size} notification previews. " +
-            selected.take(4).joinToString(". ") { "${it.sender.ifBlank { source }}: ${it.text.take(180)}" } +
-            "." + if (selected.size > 4) " And ${selected.size - 4} more." else ""
+        return notificationText(selected, selected.size, source, options.copy(collected = true))
     }
 
     fun currentNotificationText(
         notifications: List<BriefingActiveNotification>?,
         source: String,
-        mode: NotificationReadingMode,
+        options: NotificationReadingOptions,
         rules: List<BriefingFilter>
     ): String {
         if (notifications == null) return "$source notifications could not be checked. Check notification access in settings."
         val selected = notifications.filter { it.app == source }
             .filter { item -> item.messages.any { BriefingFilters.allows(it, rules) } }
-        val count = selected.size
-        val intro = "$source, $count ${if (count == 1) "notification" else "notifications"} waiting."
-        if (count == 0) return if (mode == NotificationReadingMode.SENDERS_ONLY)
-            "No $source notifications waiting." else intro
-        if (mode == NotificationReadingMode.COUNT_ONLY) return intro
         val messages = selected.flatMap { it.messages }.filter { BriefingFilters.allows(it, rules) }
-        if (mode == NotificationReadingMode.COUNT_SENDERS_AND_PREVIEWS) {
+        return notificationText(messages, selected.size, source, options.copy(collected = false))
+    }
+
+    private fun notificationText(
+        messages: List<BriefingMessage>, count: Int, source: String, options: NotificationReadingOptions
+    ): String {
+        if (!options.anySelected) return ""
+        if (count == 0) return if (options.count)
+            if (options.collected) "$source, 0 notification previews in the briefing window." else "$source, 0 notifications waiting."
+            else if (options.collected) "No collected $source notifications in the briefing window." else "No $source notifications waiting."
+        val intro = if (!options.count) "$source." else if (options.collected)
+            "$source, $count notification previews." else
+            "$source, $count ${if (count == 1) "notification" else "notifications"} waiting."
+        if (options.previews) {
             val previews = messages.distinctBy { listOf(it.sender.trim().lowercase(Locale.ROOT), it.text, it.conversation) }
             return "$intro " + previews.take(4).joinToString(". ") {
-                "${it.sender.trim().ifBlank { source }}: " + it.text.trim().take(180).ifBlank { "Preview unavailable" }
-            } + "." + if (previews.size > 4) " And ${previews.size - 4} more previews." else ""
+                val name = if (options.senders) "${it.sender.trim().ifBlank { source }}: " else ""
+                name + it.text.trim().take(180).ifBlank { "Preview unavailable" }
+            } + "." + if (previews.size > 4) {
+                if (options.count) " And ${previews.size - 4} more previews." else " More previews are available."
+            } else ""
         }
+        if (!options.senders) return intro
         val senders = messages.map { it.sender.trim() }
             .filter { it.isNotEmpty() && !it.equals(source, ignoreCase = true) }
             .distinctBy { it.lowercase(Locale.ROOT) }
-        val prefix = if (mode == NotificationReadingMode.SENDERS_ONLY) "$source." else intro
-        if (senders.isEmpty()) return "$prefix Sender names are unavailable in these notifications."
-        return "$prefix Senders. " + senders.take(10).joinToString(". ") + "." +
-            if (senders.size > 10) " And ${senders.size - 10} more senders." else ""
+        if (senders.isEmpty()) return "$intro Sender names are unavailable in these notifications."
+        return "$intro Senders. " + senders.take(10).joinToString(". ") + "." +
+            if (senders.size > 10) {
+                if (options.count) " And ${senders.size - 10} more senders." else " More sender names are available."
+            } else ""
     }
 
     fun build(c: Context, now: Long): String = buildString {
@@ -115,11 +128,11 @@ internal object BriefingSummary {
             val current = BriefingNotificationListener.currentNotifications()
             for (source in listOf("WhatsApp", "Gmail")) {
                 if (MorningBriefing.allowed(c, source)) {
-                    val mode = NotificationReadingMode.read(c, source)
+                    val options = NotificationReadingOptions.read(c, source)
                     append(when {
                         !notificationsReady -> "$source notification access is off. Enable it in Morning briefing settings."
-                        mode == NotificationReadingMode.PREVIEWS -> messagesText(messages, source)
-                        else -> currentNotificationText(current, source, mode, rules)
+                        options.collected -> messagesText(messages, source, options)
+                        else -> currentNotificationText(current, source, options, rules)
                     })
                     append(" ")
                 }

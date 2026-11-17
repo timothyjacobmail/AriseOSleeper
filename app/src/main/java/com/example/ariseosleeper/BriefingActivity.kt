@@ -106,7 +106,7 @@ class BriefingActivity : AppCompatActivity() {
         val notificationViews = mutableListOf<android.view.View>()
         for (app in listOf("WhatsApp", "Gmail")) {
             notificationViews.add(source(if (app == "WhatsApp") "WhatsApp and WhatsApp Business" else "Gmail", app))
-            val choice = setting("$app reading", NotificationReadingMode.read(this, app).label) { chooseNotificationMode(app) }
+            val choice = setting("$app reading", NotificationReadingOptions.read(this, app).label) { chooseNotificationMode(app) }
             notificationModeButtons[app] = choice
             sourceControls[app] = listOf(choice)
             notificationViews.add(choice)
@@ -124,7 +124,7 @@ class BriefingActivity : AppCompatActivity() {
         notificationViews.add(button("How notification reading works") {
             com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
                 .setTitle("Notification reading")
-                .setMessage("Count and sender modes use notifications currently in your notification tray. Apps can bundle several messages into one notification.\n\nPreview mode reads collected notifications since the last completed briefing, up to the previous 12 hours. It reads up to four previews per app. Filters apply to both approaches.\n\nAndroid may hide sensitive previews. Collected previews older than 24 hours are removed during collection or briefing.")
+                .setMessage("Choose Count, Sender names and Message previews independently for each app.\n\nWaiting notifications reads cards currently in your tray. Apps can bundle several messages into one card. The collected briefing window reads saved previews since the last completed briefing, up to the previous 12 hours.\n\nReads up to four previews or ten unique names per app. Filters apply to either source. Android may hide sensitive content. Collected previews older than 24 hours are removed during collection or briefing.")
                 .setPositiveButton("Got it", null).show()
         })
 
@@ -212,7 +212,7 @@ class BriefingActivity : AppCompatActivity() {
         connectButton?.isEnabled = !connecting
         disconnectButton?.visibility = if (p.getBoolean("tasks_connected", false)) android.view.View.VISIBLE else android.view.View.GONE
         notificationModeButtons.forEach { (source, button) ->
-            button.text = "$source reading\n${NotificationReadingMode.read(this, source).label}"
+            button.text = "$source reading\n${NotificationReadingOptions.read(this, source).label}"
         }
         val rules = BriefingFilters.read(this)
         sourceControls["notifications"]?.firstOrNull()?.let {
@@ -268,15 +268,51 @@ class BriefingActivity : AppCompatActivity() {
         }
     }
     private fun chooseNotificationMode(source: String) {
-        val modes = NotificationReadingMode.values().toList()
-        val current = NotificationReadingMode.read(this, source)
-        val labels = modes.map { it.label + "\n" + it.description }
-        UiComponents.choiceDialog(this, "$source reading style", labels, modes.indexOf(current)) { index ->
-            stopService(Intent(this, BriefingService::class.java))
-            MorningBriefing.prefs(this).edit().putString("notification_mode_$source", modes[index].name)
-                .putString("playback_status", "Reading style saved. Read a new briefing to apply it.")
-                .remove("last_summary").remove("summary_at").apply()
+        val current = NotificationReadingOptions.read(this, source)
+        var count = current.count
+        var senders = current.senders
+        var previews = current.previews
+        var collected = current.collected
+        val body = UiComponents.column(this).apply {
+            val pad = UiStyle.dp(context, 20)
+            setPadding(pad, 0, pad, pad)
         }
+        val feedback = label("Select one or more items to read.").apply {
+            accessibilityLiveRegion = android.view.View.ACCESSIBILITY_LIVE_REGION_POLITE
+        }
+        lateinit var dialog: androidx.appcompat.app.AlertDialog
+        fun validate() {
+            val valid = count || senders || previews
+            feedback.text = if (valid) "Select one or more items to read." else
+                "Select at least one item, or turn off $source on the briefing page."
+            dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE)?.isEnabled = valid
+        }
+        UiComponents.add(body, feedback)
+        UiComponents.add(body, UiComponents.checkbox(this, "Notification count", count) { count = it; validate() })
+        UiComponents.add(body, UiComponents.checkbox(this, "Sender names", senders) { senders = it; validate() })
+        UiComponents.add(body, UiComponents.checkbox(this, "Message previews", previews) { previews = it; validate() })
+        UiComponents.add(body, label("Notifications to read", 20f))
+        UiComponents.add(body, UiComponents.radioChoices(this, listOf(
+            "Waiting notifications", "Collected briefing window (up to 12 hours)"),
+            if (collected) 1 else 0) { collected = it == 1 })
+        UiComponents.add(body, label("Waiting counts notification cards currently in your tray. Collected counts saved previews since the last completed briefing. Apps may bundle several messages into one card. Reads up to four previews or ten unique sender names."))
+        dialog = com.google.android.material.dialog.MaterialAlertDialogBuilder(this).setTitle("$source reading")
+            .setView(ScrollView(this).apply { addView(body) })
+            .setPositiveButton("Apply", null).setNegativeButton("Cancel", null).create()
+        dialog.setOnShowListener {
+            validate()
+            dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val options = NotificationReadingOptions(count, senders, previews, collected)
+                if (!options.anySelected) return@setOnClickListener
+                stopService(Intent(this, BriefingService::class.java))
+                MorningBriefing.prefs(this).edit().putStringSet("notification_parts_$source", options.parts)
+                    .putBoolean("notification_collected_$source", options.collected)
+                    .putString("playback_status", "Reading options saved. Read a new briefing to apply them.")
+                    .remove("last_summary").remove("summary_at").apply()
+                dialog.dismiss()
+            }
+        }
+        dialog.show()
     }
 
 
