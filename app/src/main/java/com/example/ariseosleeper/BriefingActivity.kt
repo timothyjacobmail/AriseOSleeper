@@ -134,7 +134,7 @@ class BriefingActivity : AppCompatActivity() {
         calendarViews.add(label(if (calendarGranted) "Calendar access granted" else "Calendar access needed"))
         if (!calendarGranted) calendarViews.add(button("Allow calendar access") { calendar.launch(Manifest.permission.READ_CALENDAR) })
 
-        taskListButton = setting("Task list", prefs.getString("task_list_title", "immediate tasks").orEmpty()) { chooseTaskList() }
+        taskListButton = setting("Task lists", "") { chooseTaskLists() }
         val dueOnly = UiComponents.settingSwitch(this, "Only tasks due today or tomorrow",
             prefs.getBoolean("tasks_due_only", false)) { savePreference("tasks_due_only", it) }
         taskStatus = label("").apply { accessibilityLiveRegion = android.view.View.ACCESSIBILITY_LIVE_REGION_POLITE }
@@ -203,7 +203,12 @@ class BriefingActivity : AppCompatActivity() {
                 else p.getBoolean(source, true)
             controls.forEach { it.isEnabled = enabled && available }
         }
-        taskListButton?.text = "Task list\n" + p.getString("task_list_title", "immediate tasks")
+        val ids = BriefingTasks.selectedIds(p)
+        val selected = BriefingTasks.selectLists(BriefingTasks.cachedLists(this), ids)
+        val title = BriefingTasks.selectionTitle(selected, ids).ifEmpty {
+            if (ids.isEmpty()) "immediate tasks" else "Choose task lists"
+        }
+        taskListButton?.text = "Task lists\n$title"
         val recentDays = p.getInt("tasks_updated_days", 0)
         taskRecencyButton?.text = "Task recency\n" + if (recentDays <= 0) "All update times"
             else "Updated in the last $recentDays ${if (recentDays == 1) "day" else "days"}"
@@ -333,7 +338,7 @@ class BriefingActivity : AppCompatActivity() {
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { daysBox.error = null }
             override fun afterTextChanged(s: android.text.Editable?) = Unit
         })
-        UiComponents.add(body, label("Google provides the last update time, not the creation date. Editing an older task makes it recent again. This combines with your selected list and due-date filter."))
+        UiComponents.add(body, label("Google provides the last update time, not the creation date. Editing an older task makes it recent again. This combines with your selected lists and due-date filter."))
         UiComponents.add(body, UiComponents.radioChoices(this,
             listOf("All update times", "Only recently updated tasks"), if (recentOnly) 1 else 0) {
             recentOnly = it == 1
@@ -361,16 +366,21 @@ class BriefingActivity : AppCompatActivity() {
         dialog.show()
     }
 
-    private fun chooseTaskList() {
+    private fun chooseTaskLists() {
         val lists = BriefingTasks.cachedLists(this)
         if (lists.isEmpty()) {
-            Toast.makeText(this, "Fetching your task lists. Open Task list again when the connection check finishes.", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Fetching your task lists. Open Task lists again when the connection check finishes.", Toast.LENGTH_LONG).show()
             connectTasks()
             return
         }
         val choices = listOf(BriefingTaskList(BriefingTasks.ALL_LISTS, "All task lists")) + lists
         val prefs = MorningBriefing.prefs(this)
-        var selected = choices.indexOfFirst { it.id == prefs.getString("task_list_id", "") }
+        val saved = BriefingTasks.selectedIds(prefs)
+        val selected = when {
+            BriefingTasks.ALL_LISTS in saved -> mutableSetOf(BriefingTasks.ALL_LISTS)
+            saved.isEmpty() -> setOfNotNull(BriefingTasks.selectLists(lists, saved).singleOrNull()?.id).toMutableSet()
+            else -> lists.map { it.id }.intersect(saved).toMutableSet()
+        }
         var visible = choices.indices.toList()
         val body = UiComponents.column(this).apply {
             val pad = UiStyle.dp(context, 20)
@@ -380,10 +390,10 @@ class BriefingActivity : AppCompatActivity() {
         UiComponents.add(body, searchBox)
         val empty = label("No task lists match your search.")
         val listView = ListView(this).apply {
-            choiceMode = ListView.CHOICE_MODE_SINGLE
+            choiceMode = ListView.CHOICE_MODE_MULTIPLE
             divider = null
         }
-        val adapter = object : ArrayAdapter<String>(this, android.R.layout.simple_list_item_single_choice, mutableListOf()) {
+        val adapter = object : ArrayAdapter<String>(this, android.R.layout.simple_list_item_multiple_choice, mutableListOf()) {
             override fun getView(position: Int, convertView: android.view.View?, parent: android.view.ViewGroup): android.view.View {
                 return (super.getView(position, convertView, parent) as TextView).apply {
                     textSize = 16f
@@ -399,13 +409,17 @@ class BriefingActivity : AppCompatActivity() {
             (resources.configuration.screenHeightDp / 3).coerceIn(72, 320))))
         body.addView(empty)
         listView.emptyView = empty
+        fun updateChecks() {
+            listView.clearChoices()
+            visible.forEachIndexed { position, index ->
+                listView.setItemChecked(position, BriefingTasks.ALL_LISTS in selected || choices[index].id in selected)
+            }
+        }
         fun refreshChoices(query: String) {
             visible = choices.indices.filter { choices[it].title.contains(query, ignoreCase = true) }
             adapter.clear()
             adapter.addAll(visible.map { choices[it].title })
-            listView.clearChoices()
-            val checked = visible.indexOf(selected)
-            if (checked >= 0) listView.setItemChecked(checked, true)
+            updateChecks()
             // Size to measured, wrapping labels, with a scrollable cap for large collections.
             val rowWidth = listView.width.takeIf { it > 0 } ?: UiStyle.dp(this, resources.configuration.screenWidthDp - 104)
             val rowsHeight = (0 until adapter.count).sumOf { index ->
@@ -420,12 +434,21 @@ class BriefingActivity : AppCompatActivity() {
         }
         lateinit var dialog: androidx.appcompat.app.AlertDialog
         UiComponents.add(body, button("Refresh lists") { dialog.dismiss(); connectTasks() })
-        dialog = com.google.android.material.dialog.MaterialAlertDialogBuilder(this).setTitle("Task list")
+        dialog = com.google.android.material.dialog.MaterialAlertDialogBuilder(this).setTitle("Task lists")
             .setView(ScrollView(this).apply { addView(body) })
             .setPositiveButton("Apply", null).setNegativeButton("Cancel", null).create()
         listView.setOnItemClickListener { _, _, position, _ ->
-            selected = visible[position]
-            dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).isEnabled = true
+            val id = choices[visible[position]].id
+            if (id == BriefingTasks.ALL_LISTS) {
+                val wasAll = id in selected
+                selected.clear()
+                if (!wasAll) selected.add(id)
+            } else {
+                if (selected.remove(BriefingTasks.ALL_LISTS)) lists.mapTo(selected) { it.id }
+                if (!selected.remove(id)) selected.add(id)
+            }
+            updateChecks()
+            dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).isEnabled = selected.isNotEmpty()
         }
         searchBox.editText!!.addTextChangedListener(object : android.text.TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
@@ -435,12 +458,12 @@ class BriefingActivity : AppCompatActivity() {
         refreshChoices("")
         dialog.setOnShowListener {
             val apply = dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE)
-            apply.isEnabled = selected >= 0
+            apply.isEnabled = selected.isNotEmpty()
             apply.setOnClickListener {
-                val choice = choices.getOrNull(selected) ?: return@setOnClickListener
                 stopService(Intent(this, BriefingService::class.java))
-                prefs.edit().putString("task_list_id", choice.id).putString("task_list_title", choice.title)
-                    .putString("playback_status", "Task list saved. Read a new briefing to hear it.")
+                prefs.edit().putStringSet(BriefingTasks.SELECTED_IDS, selected.toSet())
+                    .remove("task_list_id").remove("task_list_title")
+                    .putString("playback_status", "Task lists saved. Read a new briefing to hear the changes.")
                     .remove("last_summary").remove("summary_at").apply()
                 dialog.dismiss()
             }

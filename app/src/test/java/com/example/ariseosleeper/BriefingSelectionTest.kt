@@ -7,10 +7,18 @@ import java.time.LocalDate
 class BriefingSelectionTest {
     @Test fun defaultListMatchesTheRequestedNameAndExplicitIdsSurviveRenames() {
         val lists = listOf(BriefingTaskList("a", "Work"), BriefingTaskList("b", " Immediate Tasks "))
-        assertEquals("b", BriefingTasks.selectLists(lists, "").single().id)
-        assertEquals("b", BriefingTasks.selectLists(listOf(BriefingTaskList("b", "Renamed")), "b").single().id)
-        assertTrue(BriefingTasks.selectLists(lists, "deleted").isEmpty())
-        assertEquals(2, BriefingTasks.selectLists(lists, BriefingTasks.ALL_LISTS).size)
+        assertEquals("b", BriefingTasks.selectLists(lists, emptySet()).single().id)
+        assertEquals("b", BriefingTasks.selectLists(listOf(BriefingTaskList("b", "Renamed")), setOf("b")).single().id)
+        assertTrue(BriefingTasks.selectLists(lists, setOf("deleted")).isEmpty())
+        assertEquals(2, BriefingTasks.selectLists(lists, setOf(BriefingTasks.ALL_LISTS)).size)
+    }
+
+    @Test fun multipleSelectionsUseIdsAndKeepRemainingListsWhenOneDisappears() {
+        val lists = listOf(BriefingTaskList("a", "Work"), BriefingTaskList("b", "Work"), BriefingTaskList("c", "Home"))
+        val ids = setOf("c", "deleted", "b")
+        val selected = BriefingTasks.selectLists(lists, ids)
+        assertEquals(listOf("b", "c"), selected.map { it.id })
+        assertEquals("Work, Home", BriefingTasks.selectionTitle(selected, ids))
     }
 
     @Test fun undatedAndOverdueImmediateTasksAreIncludedInSpeech() {

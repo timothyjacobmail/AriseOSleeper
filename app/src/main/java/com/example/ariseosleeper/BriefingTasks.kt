@@ -1,6 +1,7 @@
 package com.example.ariseosleeper
 
 import android.content.Context
+import android.content.SharedPreferences
 import com.google.android.gms.auth.api.identity.AuthorizationRequest
 import com.google.android.gms.auth.api.identity.Identity
 import com.google.android.gms.common.api.Scope
@@ -20,6 +21,7 @@ internal data class TaskBriefing(val items: List<BriefingTask> = emptyList(), va
 
 internal object BriefingTasks {
     const val ALL_LISTS = "*"
+    const val SELECTED_IDS = "task_list_ids"
     fun updatedCutoff(now: Instant, days: Int): Instant? =
         if (days <= 0) null else now.minusSeconds(days.coerceAtMost(365) * 86_400L)
 
@@ -30,10 +32,20 @@ internal object BriefingTasks {
         get() = AuthorizationRequest.builder().setRequestedScopes(
             listOf(Scope("https://www.googleapis.com/auth/tasks.readonly"))).build()
 
-    fun selectLists(lists: List<BriefingTaskList>, id: String): List<BriefingTaskList> = when (id) {
-        ALL_LISTS -> lists
-        "" -> lists.filter { it.title.trim().equals("immediate tasks", ignoreCase = true) }
-        else -> lists.filter { it.id == id }
+    fun selectedIds(prefs: SharedPreferences): Set<String> =
+        prefs.getStringSet(SELECTED_IDS, null)
+            ?: setOfNotNull(prefs.getString("task_list_id", null)?.takeIf { it.isNotEmpty() })
+
+    fun selectLists(lists: List<BriefingTaskList>, ids: Set<String>): List<BriefingTaskList> = when {
+        ALL_LISTS in ids -> lists
+        ids.isEmpty() -> lists.filter { it.title.trim().equals("immediate tasks", ignoreCase = true) }
+        else -> lists.filter { it.id in ids }
+    }
+
+    fun selectionTitle(selected: List<BriefingTaskList>, ids: Set<String>): String = when {
+        ALL_LISTS in ids -> "All task lists"
+        selected.size > 3 -> "${selected.size} task lists"
+        else -> selected.joinToString(", ") { it.title }
     }
 
     fun cachedLists(c: Context): List<BriefingTaskList> {
@@ -59,7 +71,6 @@ internal object BriefingTasks {
 
     fun download(c: Context, token: String, today: LocalDate = LocalDate.now()): TaskBriefing {
         val prefs = MorningBriefing.prefs(c)
-        val selectedId = prefs.getString("task_list_id", "").orEmpty()
         val dueOnly = prefs.getBoolean("tasks_due_only", false)
         val cutoff = updatedCutoff(Instant.now(), prefs.getInt("tasks_updated_days", 0))
         val result = mutableListOf<BriefingTask>()
@@ -91,13 +102,14 @@ internal object BriefingTasks {
         prefs.edit().putString("task_lists", JSONArray().apply {
             lists.forEach { put(JSONObject().put("id", it.id).put("title", it.title)) }
         }.toString()).apply()
-        val selected = selectLists(lists, selectedId)
-        if (selected.isEmpty()) return TaskBriefing(status = "The selected Tasks list was not found. Choose a task list in Morning briefing settings.")
-        if (selectedId.isEmpty() && selected.size > 1)
+        val ids = selectedIds(prefs)
+        val selected = selectLists(lists, ids)
+        if (selected.isEmpty()) return TaskBriefing(status = "No matching task lists were found. Choose task lists in Morning briefing settings.")
+        if (ids.isEmpty() && selected.size > 1)
             return TaskBriefing(status = "More than one list is named immediate tasks. Choose a task list in settings.")
-        val listTitle = if (selectedId == ALL_LISTS) "all task lists" else selected.single().title
-        prefs.edit().putString("task_list_title", listTitle).apply()
-        if (selectedId.isEmpty()) prefs.edit().putString("task_list_id", selected.single().id).apply()
+        val listTitle = if (ALL_LISTS in ids) "all task lists" else selectionTitle(selected, ids)
+        // Pin the automatic default across renames. An explicit multi-selection always takes precedence.
+        if (ids.isEmpty()) prefs.edit().putString("task_list_id", selected.single().id).apply()
         for (list in selected) {
             page = ""
             do {

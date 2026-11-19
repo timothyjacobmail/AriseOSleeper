@@ -139,9 +139,9 @@ class UiReviewTest {
                 screenshot("notification-multi-select")
                 click("Apply")
                 assertEquals(NotificationReadingOptions(false, true, true, false), NotificationReadingOptions.read(context, "WhatsApp"))
-                reveal("Task list\nImmediate tasks")
+                reveal("Task lists\nImmediate tasks")
                 screenshot("tasks")
-                click("Task list\nImmediate tasks")
+                click("Task lists\nImmediate tasks")
                 main { views().filterIsInstance<EditText>().last { it.hint == "Search lists" }.setText("personal") }
                 screenshot("task-search")
                 main {
@@ -149,7 +149,21 @@ class UiReviewTest {
                     list.performItemClick(list.getChildAt(0), 0, list.adapter.getItemId(0))
                 }
                 click("Apply")
-                assertEquals("personal", briefing.getString("task_list_id", ""))
+                assertEquals(setOf("immediate", "personal"), BriefingTasks.selectedIds(briefing))
+                click("Task lists\nImmediate tasks, Personal and household")
+                main {
+                    val list = views().filterIsInstance<android.widget.ListView>().last { it.isShown }
+                    assertTrue(list.isItemChecked(1))
+                    assertTrue(list.isItemChecked(2))
+                    list.performItemClick(list.getChildAt(0), 0, list.adapter.getItemId(0))
+                    assertTrue(list.isItemChecked(3))
+                    list.performItemClick(list.getChildAt(1), 1, list.adapter.getItemId(1))
+                    assertFalse(list.isItemChecked(0))
+                    assertFalse(list.isItemChecked(1))
+                    assertTrue(list.isItemChecked(2))
+                }
+                click("Cancel")
+                assertEquals(setOf("immediate", "personal"), BriefingTasks.selectedIds(briefing))
                 reveal("Task recency\nAll update times")
                 click("Task recency\nAll update times")
                 main {

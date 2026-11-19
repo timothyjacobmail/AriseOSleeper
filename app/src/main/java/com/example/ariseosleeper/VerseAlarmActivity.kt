@@ -37,6 +37,7 @@ class VerseAlarmActivity : AppCompatActivity() {
     private var rendered = ""
     private var status: TextView? = null
     private var answer: EditText? = null
+    private var mistakeHighlighter: VerseMistakeHighlighter? = null
     private var dictatedText: String? = null
     private var pendingDictation: String? = null
     private var dictationStatus: TextView? = null
@@ -124,11 +125,18 @@ class VerseAlarmActivity : AppCompatActivity() {
     }
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (event.keyCode in listOf(KeyEvent.KEYCODE_VOLUME_DOWN, KeyEvent.KEYCODE_VOLUME_UP,
-                KeyEvent.KEYCODE_VOLUME_MUTE) && VerseAlarmStore.read(this).challenge != null) {
-            VerseAlarmVolume.sync(this)
-            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0)
-                toast("Alarm volume stays fixed until all checks are complete.")
-            return true
+                KeyEvent.KEYCODE_VOLUME_MUTE)) {
+            val ch = VerseAlarmStore.read(this).challenge
+            if (ch != null) {
+                VerseAlarmVolume.sync(this)
+                if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                    if (ch.ringing(AlarmClock.now(this)) && !ch.quietUsed)
+                        attempt { VerseAlarmStore.quiet(this, ch.id) }
+                    else toast(if (ch.ringing(AlarmClock.now(this))) "Quiet time has already been used for this check."
+                        else "Alarm volume stays fixed until all checks are complete.")
+                }
+                return true
+            }
         }
         return super.dispatchKeyEvent(event)
     }
@@ -183,6 +191,7 @@ class VerseAlarmActivity : AppCompatActivity() {
             stopDictationButton = null
             cancelDictationButton = null
             checkAnswerButton = null
+            mistakeHighlighter = null
             when {
                 ch != null && editingSettings -> showSettings(s)
                 waiting -> showWaiting(ch!!)
@@ -196,6 +205,8 @@ class VerseAlarmActivity : AppCompatActivity() {
             }
             updateDictationControls()
         }
+        mistakeHighlighter?.enabled = ch != null && ch.quietUsed && ch.ringing(now) &&
+            !waiting && !editingSettings
         status?.text = if (ch != null && editingSettings) buildString {
             append("A wake-up routine is active. Settings changes wait 15 minutes and cannot end the current routine.")
             if (s.pending != null) append("\nChange requested: ${((s.countdown?.remaining(now) ?: 0L) + 59_999) / 60_000} minutes remaining. It applies after the current routine finishes.")
@@ -311,12 +322,14 @@ class VerseAlarmActivity : AppCompatActivity() {
         val v = s.verses.first { it.id == ch.verseId }
         status = label("")
         answer = responseField()
+        mistakeHighlighter = VerseMistakeHighlighter(answer!!, v.text)
         val result = label("")
         show(listOf(label(if (ch.warning(AlarmClock.now(this))) "One-minute alarm warning" else "Verse wake-up", 26f), status!!, label("${v.reference} · ESV", 22f),
             label(if (ch.fromMemory) "From memory — you have completed this passage ${v.successes} times."
                 else "Learning — ${v.successes}/${s.config.memoryAfter} completions before memory mode."),
             label(if (ch.fromMemory) "Write or recite the passage from memory. The text stays hidden during this challenge." else v.text),
             answer!!, label("Capitalization and punctuation do not matter. Include the passage only, without verse numbers."),
+            label("After quiet time ends, red underlines mark differing words. A missing word is marked at the next typed word, or the last word if it is missing at the end."),
             dictationControls(),
             UiStyle.button(this, "Check my verse", primary = true) {
                 val value = answer!!.text.toString()
@@ -337,7 +350,7 @@ class VerseAlarmActivity : AppCompatActivity() {
                 attempt { VerseAlarmStore.quiet(this, ch.id) }
             }.apply { isEnabled = !ch.quietUsed && ch.ringing(AlarmClock.now(this@VerseAlarmActivity)) }, result,
             button("Alarm settings") { editingSettings = true; rendered = ""; refresh() },
-            label("One quiet period of ${v.quietSeconds} seconds per check, shared with dictation. Alarm volume stays fixed until all checks are complete.")))
+            label("While ringing, press either volume button here or press Power to turn the screen off and start quiet time. One quiet period of ${v.quietSeconds} seconds per check, shared with Quiet and Dictate. Alarm volume stays fixed until all checks are complete.")))
     }
 
     private fun showPractice(v: AlarmVerse) {
