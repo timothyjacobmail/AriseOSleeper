@@ -10,8 +10,11 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <queries>
+        <intent><action android:name="android.intent.action.TTS_SERVICE" /></intent>
         <intent>
             <action android:name="android.speech.RecognitionService" />
         </intent>
@@ -30,6 +33,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity android:name=".BriefingActivity" android:exported="false" />
+        <service android:name=".BriefingService" android:exported="false" android:foregroundServiceType="mediaPlayback" />
+        <service android:name=".BriefingNotificationListener" android:exported="true"
+            android:label="Morning briefing · WhatsApp and Gmail"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter><action android:name="android.service.notification.NotificationListenerService" /></intent-filter>
+        </service>
         <service android:name=".VerseAlarmService" android:exported="false"
             android:directBootAware="true" android:foregroundServiceType="mediaPlayback" />
         <receiver android:name=".VerseAlarmReceiver" android:exported="false" android:directBootAware="true">

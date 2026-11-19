@@ -204,6 +204,18 @@ class VerseAlarmScreenTest {
                     assertTrue(activity.findViewWithTag<View>("$firstKey:content").isShown)
                     descendants(activity.findViewById(android.R.id.content)).filterIsInstance<TextView>()
                         .first { it.text.toString() == "Remove First passage" }.performClick()
+                    assertEquals(2, VerseAlarmStore.read(c).verses.size)
+                }
+                androidx.test.espresso.Espresso.onView(androidx.test.espresso.matcher.ViewMatchers.withId(android.R.id.button2))
+                    .perform(androidx.test.espresso.action.ViewActions.click())
+                assertEquals(2, VerseAlarmStore.read(c).verses.size)
+                scenario.onActivity { activity ->
+                    descendants(activity.findViewById(android.R.id.content)).filterIsInstance<TextView>()
+                        .first { it.text.toString() == "Remove First passage" }.performClick()
+                }
+                androidx.test.espresso.Espresso.onView(androidx.test.espresso.matcher.ViewMatchers.withId(android.R.id.button1))
+                    .perform(androidx.test.espresso.action.ViewActions.click())
+                scenario.onActivity {
                     assertEquals(listOf("Second passage"), VerseAlarmStore.read(c).verses.map { it.reference })
                 }
             }

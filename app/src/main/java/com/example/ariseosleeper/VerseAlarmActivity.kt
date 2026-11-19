@@ -37,6 +37,7 @@ class VerseAlarmActivity : AppCompatActivity() {
     private var rendered = ""
     private var status: TextView? = null
     private var answer: EditText? = null
+    private var mistakeHighlighter: VerseMistakeHighlighter? = null
     private var dictatedText: String? = null
     private var pendingDictation: String? = null
     private var dictationStatus: TextView? = null
@@ -56,6 +57,9 @@ class VerseAlarmActivity : AppCompatActivity() {
     }
     private var practice: AlarmVerse? = null
     private var editingSettings = false
+    private var passageSearch = ""
+    private var settingsDraft: AlarmSettingsDraft? = null
+    private var settingsForm: (() -> AlarmSettingsDraft)? = null
     private var previewSound: android.media.Ringtone? = null
     private val expandedPassageSections = mutableSetOf("saved-passages")
     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -82,6 +86,8 @@ class VerseAlarmActivity : AppCompatActivity() {
         setTurnScreenOn(true)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or WindowManager.LayoutParams.FLAG_SECURE)
         pendingDictation = savedInstanceState?.getString("pendingDictation")
+        settingsDraft = AlarmSettingsDraft.restore(savedInstanceState?.getBundle("alarmForm"))
+        passageSearch = savedInstanceState?.getString("passageSearch").orEmpty()
         savedInstanceState?.getStringArrayList("expandedPassageSections")?.let {
             expandedPassageSections.clear()
             expandedPassageSections.addAll(it)
@@ -89,17 +95,21 @@ class VerseAlarmActivity : AppCompatActivity() {
     }
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putString("pendingDictation", pendingDictation)
+        outState.putString("passageSearch", passageSearch)
+        (settingsForm?.invoke() ?: settingsDraft)?.let { outState.putBundle("alarmForm", it.save()) }
         outState.putStringArrayList("expandedPassageSections", ArrayList(expandedPassageSections))
         super.onSaveInstanceState(outState)
     }
     override fun onResume() {
         super.onResume()
         VerseAlarmScheduler.sync(this)
+        MorningBriefing.maybeStart(this)
         if (VerseAlarmStore.read(this).challenge == null && practice == null) rendered = ""
         handler.removeCallbacks(tick)
         handler.post(tick)
     }
     override fun onPause() {
+        settingsForm?.let { settingsDraft = it() }
         handler.removeCallbacks(tick)
         previewSound?.stop()
         dictation.cancel("Dictation stopped because you left the verse screen. Tap Dictate to start again.")
@@ -115,11 +125,18 @@ class VerseAlarmActivity : AppCompatActivity() {
     }
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (event.keyCode in listOf(KeyEvent.KEYCODE_VOLUME_DOWN, KeyEvent.KEYCODE_VOLUME_UP,
-                KeyEvent.KEYCODE_VOLUME_MUTE) && VerseAlarmStore.read(this).challenge != null) {
-            VerseAlarmVolume.sync(this)
-            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0)
-                toast("Alarm volume stays fixed until all checks are complete.")
-            return true
+                KeyEvent.KEYCODE_VOLUME_MUTE)) {
+            val ch = VerseAlarmStore.read(this).challenge
+            if (ch != null) {
+                VerseAlarmVolume.sync(this)
+                if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                    if (ch.ringing(AlarmClock.now(this)) && !ch.quietUsed)
+                        attempt { VerseAlarmStore.quiet(this, ch.id) }
+                    else toast(if (ch.ringing(AlarmClock.now(this))) "Quiet time has already been used for this check."
+                        else "Alarm volume stays fixed until all checks are complete.")
+                }
+                return true
+            }
         }
         return super.dispatchKeyEvent(event)
     }
@@ -143,22 +160,8 @@ class VerseAlarmActivity : AppCompatActivity() {
         importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
     }
     private fun show(views: List<View>) {
-        val column = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            val pad = UiStyle.dp(this@VerseAlarmActivity, 20)
-            setPadding(pad, pad, pad, pad)
-            views.forEach { addView(it, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 12 }) }
-        }
-        UiStyle.styleInputs(column)
-        val scroll = ScrollView(this).apply { addView(column) }
-        scroll.setOnApplyWindowInsetsListener { v, insets ->
-            val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
-            val ime = insets.getInsets(WindowInsets.Type.ime())
-            v.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, ime.bottom))
-            insets
-        }
-        setContentView(scroll)
-        scroll.requestApplyInsets()
+        views.forEach(UiStyle::styleInputs)
+        UiComponents.page(this, null, views)
     }
     private fun attempt(action: () -> Unit) {
         try { action(); VerseAlarmScheduler.sync(this); refresh() }
@@ -177,6 +180,8 @@ class VerseAlarmActivity : AppCompatActivity() {
         val key = if (ch != null) "${ch.id}|$waiting|$preview|${ch.quietUsed}|$editingSettings|${s.pending}" else
             "${s.config}|${s.pending}|${s.verses.hashCode()}|${practice?.id}"
         if (key != rendered) {
+            settingsForm?.let { settingsDraft = it() }
+            settingsForm = null
             val previousAnswer = if (ch != null && rendered.substringBefore('|') == ch.id) answer?.text?.toString() else null
             val previousDictation = dictatedText?.takeIf { it == previousAnswer }
             rendered = key
@@ -186,6 +191,7 @@ class VerseAlarmActivity : AppCompatActivity() {
             stopDictationButton = null
             cancelDictationButton = null
             checkAnswerButton = null
+            mistakeHighlighter = null
             when {
                 ch != null && editingSettings -> showSettings(s)
                 waiting -> showWaiting(ch!!)
@@ -199,6 +205,8 @@ class VerseAlarmActivity : AppCompatActivity() {
             }
             updateDictationControls()
         }
+        mistakeHighlighter?.enabled = ch != null && ch.quietUsed && ch.ringing(now) &&
+            !waiting && !editingSettings
         status?.text = if (ch != null && editingSettings) buildString {
             append("A wake-up routine is active. Settings changes wait 15 minutes and cannot end the current routine.")
             if (s.pending != null) append("\nChange requested: ${((s.countdown?.remaining(now) ?: 0L) + 59_999) / 60_000} minutes remaining. It applies after the current routine finishes.")
@@ -314,18 +322,24 @@ class VerseAlarmActivity : AppCompatActivity() {
         val v = s.verses.first { it.id == ch.verseId }
         status = label("")
         answer = responseField()
+        mistakeHighlighter = VerseMistakeHighlighter(answer!!, v.text)
         val result = label("")
         show(listOf(label(if (ch.warning(AlarmClock.now(this))) "One-minute alarm warning" else "Verse wake-up", 26f), status!!, label("${v.reference} · ESV", 22f),
             label(if (ch.fromMemory) "From memory — you have completed this passage ${v.successes} times."
                 else "Learning — ${v.successes}/${s.config.memoryAfter} completions before memory mode."),
             label(if (ch.fromMemory) "Write or recite the passage from memory. The text stays hidden during this challenge." else v.text),
             answer!!, label("Capitalization and punctuation do not matter. Include the passage only, without verse numbers."),
+            label("After quiet time ends, red underlines mark differing words. A missing word is marked at the next typed word, or the last word if it is missing at the end."),
             dictationControls(),
-            button("Check my verse") {
+            UiStyle.button(this, "Check my verse", primary = true) {
                 val value = answer!!.text.toString()
                 attempt {
                     if (VerseAlarmStore.answer(this, ch.id, value, dictatedText == value)) {
                         toast(if (ch.round + 1 >= s.config.sessions) "Wake-up routine complete." else "Verse complete. Your next check is in five minutes.")
+                        if (ch.round + 1 >= s.config.sessions) {
+                            VerseAlarmScheduler.sync(this)
+                            MorningBriefing.maybeStart(this)
+                        }
                     } else {
                         result.text = "That does not match yet. Check the words and their order, then try again."
                         return@attempt
@@ -336,7 +350,7 @@ class VerseAlarmActivity : AppCompatActivity() {
                 attempt { VerseAlarmStore.quiet(this, ch.id) }
             }.apply { isEnabled = !ch.quietUsed && ch.ringing(AlarmClock.now(this@VerseAlarmActivity)) }, result,
             button("Alarm settings") { editingSettings = true; rendered = ""; refresh() },
-            label("One quiet period of ${v.quietSeconds} seconds per check, shared with dictation. Alarm volume stays fixed until all checks are complete.")))
+            label("While ringing, press either volume button here or press Power to turn the screen off and start quiet time. One quiet period of ${v.quietSeconds} seconds per check, shared with Quiet and Dictate. Alarm volume stays fixed until all checks are complete.")))
     }
 
     private fun showPractice(v: AlarmVerse) {
@@ -345,7 +359,7 @@ class VerseAlarmActivity : AppCompatActivity() {
         val result = label("")
         show(listOf(label("Practice · ${v.reference}", 26f), status!!, label(v.text), answer!!,
             dictationControls(),
-            button("Check practice") {
+            UiStyle.button(this, "Check practice", primary = true) {
                 val value = answer!!.text.toString()
                 result.text = if (VerseAlarmRules.matches(v.text, value, dictatedText == value)) "Correct." else "Check the words and their order."
             }.also { checkAnswerButton = it }, result, button("Back to alarm settings") { practice = null; rendered = ""; refresh() }))
@@ -355,8 +369,14 @@ class VerseAlarmActivity : AppCompatActivity() {
         answer = null
         status = label("")
         val draft = s.pending ?: s.config
-        val enabled = CheckBox(this).apply { text = "Daily alarms enabled"; isChecked = draft.enabled }
-        val times = draft.times.toMutableList()
+        val restored = settingsDraft?.takeIf { it.base == draft.toString() }
+        val enabled = com.google.android.material.checkbox.MaterialCheckBox(this).apply {
+            text = "Daily alarms enabled"
+            minHeight = UiStyle.dp(context, 48)
+            isChecked = restored?.enabled ?: draft.enabled
+        }
+        val times = restored?.times?.map { VerseAlarmTime(it / 60, it % 60) }?.toMutableList()
+            ?: draft.times.toMutableList()
         val timeRows = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         fun pickTime(time: VerseAlarmTime, onPicked: (VerseAlarmTime) -> Unit) {
             val picker = MaterialTimePicker.Builder()
@@ -394,14 +414,20 @@ class VerseAlarmActivity : AppCompatActivity() {
                 else { times.add(selected); renderTimes() }
             }
         }
-        val sessions = field("Sessions per alarm (1-20)", draft.sessions.toString(), true).apply {
+        val sessions = field("Sessions per alarm (1-20)", restored?.sessions ?: draft.sessions.toString(), true).apply {
             id = View.generateViewId()
         }
+        sessions.doAfterTextChanged { sessions.error = null }
         val sessionsLabel = label("Number of sessions per alarm (1-20)").apply { labelFor = sessions.id }
-        val threshold = field("Successful completions (2–20)", draft.memoryAfter.toString(), true).apply {
+        val threshold = field("Successful completions (2–20)", restored?.threshold ?: draft.memoryAfter.toString(), true).apply {
             id = View.generateViewId()
         }
+        threshold.doAfterTextChanged { threshold.error = null }
         val memoryLabel = label("Successful completions before memory mode").apply { labelFor = threshold.id }
+        settingsForm = {
+            AlarmSettingsDraft(draft.toString(), enabled.isChecked, times.map { it.hour * 60 + it.minute },
+                sessions.text.toString(), threshold.text.toString())
+        }
         val needs = AlarmSetup.missing(this)
         val setupViews = mutableListOf<View>(label("Alarm setup", 22f),
             label(if (needs.isEmpty()) "Alarm permissions are ready. Test the sound and dictation on your phone before relying on this alarm."
@@ -410,51 +436,73 @@ class VerseAlarmActivity : AppCompatActivity() {
             setupViews.add(label(step.explanation))
             setupViews.add(button(step.title) { requestAlarmSetup(step) }.apply { tag = "alarm-setup:${step.name}" })
         }
-        enabled.setOnCheckedChangeListener { _, checked ->
-            if (checked) AlarmSetup.missing(this).firstOrNull()?.let(::requestAlarmSetup)
+        // Alarm changes are a draft until Save, including the enabled state.
+        val save = UiStyle.button(this,
+            if (s.challenge != null) "Request settings change · 15 minutes" else "Save alarm settings", primary = true) {
+            attempt {
+                val sessionCount = sessions.text.toString().toIntOrNull()
+                val memoryCount = threshold.text.toString().toIntOrNull()
+                if (sessionCount == null || sessionCount !in 1..20) {
+                    sessions.error = "Enter a number from 1 to 20"
+                    sessions.requestFocus()
+                    return@attempt
+                }
+                if (memoryCount == null || memoryCount !in 2..20) {
+                    threshold.error = "Enter a number from 2 to 20"
+                    threshold.requestFocus()
+                    return@attempt
+                }
+                val config = VerseAlarmConfig(enabled.isChecked, times.first().hour,
+                    times.first().minute, memoryCount, sessionCount, times.drop(1))
+                require(config.valid()) { "Choose up to 24 different alarm times." }
+                if (config.enabled) AlarmSetup.missing(this).firstOrNull()?.let { step ->
+                    requestAlarmSetup(step)
+                    return@attempt
+                }
+                VerseAlarmStore.saveConfig(this, config)
+                toast(if (s.challenge == null) "Alarm settings saved." else "Settings change requested.")
+            }
         }
-        val views = mutableListOf<View>(label(getString(R.string.app_name), 26f), status!!,
-            label("Learn a passage with its text visible, then write or recite it from memory. Each verse has its own count. Choose the number of sessions (verse checks) per alarm, five minutes apart. A one-minute warning lets you finish each verse before the alarm rings."),
-            label("Daily times follow your phone's time zone. Settings changes save immediately when no wake-up routine is running. During a routine, changes have a 15-minute wait and cannot end the current routine. The wait ends when all checks are complete."),
-            LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setupViews.forEach { addView(it, LinearLayout.LayoutParams(-1, -2)) }
-            },
-            button("Sound settings") { openSetting(Intent(Settings.ACTION_SOUND_SETTINGS)) },
-            button("Test alarm sound · 5 seconds") {
-                previewSound?.stop()
-                previewSound = android.media.RingtoneManager.getRingtone(this,
-                    android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM))?.apply {
-                    audioAttributes = android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_ALARM).build()
-                    play()
-                }
-                val sound = previewSound
-                handler.postDelayed({ sound?.stop() }, 5000)
-            },
-            enabled, label("Daily alarm times", 22f), timeRows, addAlarm,
-            label("Each time repeats daily. All alarms use the session count below and your shared verse library. If a routine is still active, later alarms wait and run in order after it finishes. Tap Save to apply added, edited, or removed times."),
-            sessionsLabel, sessions,
-            memoryLabel, threshold,
-            label("For example, 3 means each verse stays visible for its first 3 successful alarm completions. After that, only its reference is shown and you recall the words from memory. Practice does not count toward this number."),
-            button(if (s.challenge != null) "Request settings change · 15 minutes" else "Save alarm settings") {
-                attempt {
-                    val config = VerseAlarmConfig(enabled.isChecked, times.first().hour,
-                        times.first().minute, threshold.text.toString().toIntOrNull() ?: -1,
-                        sessions.text.toString().toIntOrNull() ?: -1, times.drop(1))
-                    require(config.valid()) { "Use 1-20 sessions, a memory threshold of 2-20, and up to 24 different alarm times." }
-                    if (config.enabled) AlarmSetup.missing(this).firstOrNull()?.let { step ->
-                        requestAlarmSetup(step)
-                        return@attempt
+        val schedule = UiComponents.section(this, "Daily alarms", listOf(
+            enabled, label("Changes in this section apply when you save."),
+            label("Daily alarm times", 20f), timeRows, addAlarm,
+            label("Times follow your phone’s time zone. Each alarm uses the wake-up settings below."),
+            sessionsLabel, sessions, memoryLabel, threshold,
+            label("A passage stays visible for this many successful completions, then switches to memory mode."),
+            save))
+        if (needs.isNotEmpty()) expandedPassageSections.add("alarm-help")
+        val help = passageDropdown("alarm-help", "Alarm setup and help",
+            if (needs.isEmpty()) "Permissions ready · Sound and routine guidance" else "${needs.size} setup steps remaining",
+            setupViews + listOf(
+                button("Sound settings") { openSetting(Intent(Settings.ACTION_SOUND_SETTINGS)) },
+                button("Test alarm sound · 5 seconds") {
+                    previewSound?.stop()
+                    previewSound = android.media.RingtoneManager.getRingtone(this,
+                        android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM))?.apply {
+                        audioAttributes = android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_ALARM).build()
+                        play()
                     }
-                    VerseAlarmStore.saveConfig(this, config)
-                }
-            })
+                    val sound = previewSound
+                    handler.postDelayed({ sound?.stop() }, 5000)
+                },
+                label("Complete each passage by typing or dictation. Wake-up checks are five minutes apart, with a one-minute warning."),
+                label("During a routine, settings changes have a 15-minute wait and apply after all checks finish.")
+            ))
+        val views = mutableListOf<View>(
+            label(getString(R.string.app_name), 26f), status!!,
+            button("Morning briefing") { startActivity(Intent(this, BriefingActivity::class.java)) },
+            schedule, help)
+
         if (s.pending != null) views.add(button("Cancel pending settings change") { attempt { VerseAlarmStore.cancelChange(this) } })
         views.add(label("Your ESV passages", 22f))
         val canAddPassage = s.challenge == null
         val addViews = mutableListOf<View>(label("Paste an ESV Bible share into the passage box to fill in its reference and text automatically, then tap Add passage. You can also enter them separately. No passages are downloaded or bundled."))
-        val reference = field("Reference, e.g. Psalm 23:1").apply { isEnabled = canAddPassage }
+        val reference = field("Reference, e.g. Psalm 23:1").apply {
+            id = View.generateViewId()
+            isEnabled = canAddPassage
+        }
         val passage = field("Paste ESV passage text without verse numbers").apply {
+            id = View.generateViewId()
             minLines = 4
             isEnabled = canAddPassage
         }
@@ -477,7 +525,9 @@ class VerseAlarmActivity : AppCompatActivity() {
             id = View.generateViewId()
             isEnabled = canAddPassage
         }
+        addViews.add(label("Passage reference").apply { labelFor = reference.id })
         addViews.add(reference)
+        addViews.add(label("Passage text").apply { labelFor = passage.id })
         addViews.add(passage)
         addViews.add(label("Quiet time for this passage (seconds)").apply { labelFor = quiet.id })
         addViews.add(quiet)
@@ -489,6 +539,13 @@ class VerseAlarmActivity : AppCompatActivity() {
         views.add(passageDropdown("add-passage", "Add a passage",
             if (canAddPassage) "Paste a Bible share or enter text manually" else "Available after the current routine", addViews))
         val savedViews = mutableListOf<View>()
+        val savedRows = mutableListOf<Pair<AlarmVerse, View>>()
+        val search = field("Search passages", passageSearch).apply {
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
+            contentDescription = if (canAddPassage) "Search passage references and text" else "Search passage references"
+        }
+        val noMatches = label("")
+        if (s.verses.isNotEmpty()) savedViews.add(search)
         if (s.verses.isEmpty()) savedViews.add(label("No passages yet. Open Add a passage above to start your library."))
         s.verses.forEach { v ->
             val verseViews = mutableListOf<View>(label(if (canAddPassage) v.text
@@ -506,17 +563,36 @@ class VerseAlarmActivity : AppCompatActivity() {
             if (!canAddPassage) verseViews.add(label("Finish the current routine to edit quiet time."))
             verseViews.add(button("Practice ${v.reference}") { practice = v; rendered = ""; refresh() }
                 .apply { isEnabled = canAddPassage })
-            if (!s.config.enabled) verseViews.add(button("Remove ${v.reference}") { attempt { VerseAlarmStore.removeVerse(this, v.id) } })
+            if (!s.config.enabled) verseViews.add(button("Remove ${v.reference}") {
+                UiComponents.confirm(this, "Remove passage?", "Remove ${v.reference} and its saved completion count?",
+                    "Remove") { attempt { VerseAlarmStore.removeVerse(this, v.id) } }
+            })
             val progress = if (v.successes >= s.config.memoryAfter) "Memory · ${v.successes} completions"
                 else "Learning · ${v.successes}/${s.config.memoryAfter} completions"
-            savedViews.add(passageDropdown("verse:${v.id}", v.reference, "$progress · ${v.quietSeconds}s quiet", verseViews))
+            val row = passageDropdown("verse:${v.id}", v.reference, "$progress · ${v.quietSeconds}s quiet", verseViews)
+            savedRows.add(v to row)
+            savedViews.add(row)
         }
+        fun filterPassages(query: String) {
+            var shown = 0
+            savedRows.forEach { (verse, row) ->
+                val matches = verse.reference.contains(query, ignoreCase = true) ||
+                    (canAddPassage && verse.text.contains(query, ignoreCase = true))
+                row.visibility = if (matches) View.VISIBLE else View.GONE
+                if (matches) shown++
+            }
+            noMatches.text = if (shown == 0 && savedRows.isNotEmpty()) "No passages match your search." else ""
+        }
+        savedViews.add(noMatches)
+        search.doAfterTextChanged { passageSearch = it.toString(); filterPassages(passageSearch) }
+        filterPassages(passageSearch)
         val learningCount = s.verses.count { it.successes < s.config.memoryAfter }
         views.add(passageDropdown("saved-passages", "Saved passages (${s.verses.size})",
             if (s.verses.isEmpty()) "Your library is empty" else "$learningCount learning · ${s.verses.size - learningCount} from memory", savedViews))
         views.add(button(if (s.challenge != null) "Back to wake-up check" else "Close app") {
             if (s.challenge != null) { editingSettings = false; rendered = ""; refresh() } else finish()
         })
+        // Saved alarm and passage actions retain their existing scheduling paths.
         show(views)
     }
     private fun openSetting(intent: Intent) {
@@ -542,6 +618,27 @@ class VerseAlarmActivity : AppCompatActivity() {
             startActivity(step.settingsIntent(this))
         } catch (_: ActivityNotFoundException) {
             openSetting(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+        }
+    }
+}
+
+private data class AlarmSettingsDraft(
+    val base: String, val enabled: Boolean, val times: List<Int>, val sessions: String, val threshold: String
+) {
+    fun save() = Bundle().apply {
+        putString("base", base)
+        putBoolean("enabled", enabled)
+        putIntArray("times", times.toIntArray())
+        putString("sessions", sessions)
+        putString("threshold", threshold)
+    }
+    companion object {
+        fun restore(bundle: Bundle?): AlarmSettingsDraft? {
+            bundle ?: return null
+            val times = bundle.getIntArray("times")?.toList() ?: return null
+            if (times.isEmpty() || times.any { it !in 0..1439 }) return null
+            return AlarmSettingsDraft(bundle.getString("base").orEmpty(), bundle.getBoolean("enabled"), times,
+                bundle.getString("sessions").orEmpty(), bundle.getString("threshold").orEmpty())
         }
     }
 }

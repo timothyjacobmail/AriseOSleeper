@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy policy — Arise O Sleeper</title>
+<meta name="description" content="Arise O Sleeper, a personal Android verse alarm and spoken morning briefing.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body><main>
+<nav aria-label="App information"><a href="./">Arise O Sleeper</a><a href="privacy.html">Privacy policy</a><a href="terms.html">Terms of use</a></nav>
+<h1>Privacy policy</h1>
+<p><small>Arise O Sleeper · Effective November 17, 2026</small></p>
+<p>This policy describes the Arise O Sleeper Android app maintained by GitHub user timothyjacobmail, including its optional morning briefing feature.</p>
+<h2>Information used by the app</h2>
+<ul>
+<li><strong>Alarm information.</strong> Alarm schedules, selected passages, verse answers and completion counts support the wake-up routine.</li>
+<li><strong>Notification previews.</strong> With notification access, the app collects available sender names, conversation titles and text previews from WhatsApp, WhatsApp Business and Gmail. Filters determine which previews are collected and spoken.</li>
+<li><strong>Calendar events.</strong> With calendar permission, the app reads event titles, times and all-day status from calendars synced to the phone to describe today’s and tomorrow’s events.</li>
+<li><strong>Google Tasks.</strong> With your Google authorization, the app reads task-list names and identifiers, task titles, completion status and due dates to prepare the selected task summary.</li>
+</ul>
+<h2>Google account authorization</h2>
+<p>Google Tasks uses the read-only scope <code>https://www.googleapis.com/auth/tasks.readonly</code>. The app uses Google Play services to request access tokens and sends authenticated requests directly to Google Tasks. It uses this access to list tasks and prepare your briefing. Task authorization tokens are not written to the app’s own preferences or logs.</p>
+<p>The app’s use and transfer of information received from Google APIs follows the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including its Limited Use requirements. Google account data is used for the user-facing briefing feature.</p>
+<h2>Storage and retention</h2>
+<p>Alarm settings, passages, completion information, notification filters, cached task-list names and identifiers, and the latest generated briefing are stored in private app storage. Android backup is disabled for the app. The app keeps at most 500 deduplicated notification previews. It removes previews older than 24 hours during collection or briefing preparation. A briefing covers new previews since the last completed briefing, up to the previous 12 hours.</p>
+<p>The latest briefing can contain notification text, calendar event titles and task titles. It stays available for replay until replaced or cleared. Updating notification filters clears the saved briefing.</p>
+<h2>Speech services</h2>
+<p>Android text-to-speech receives the briefing text to read it aloud. Dictation uses the speech-recognition service installed on your phone to process spoken verse answers. Depending on the service and its settings, these providers may process text or audio online under their own privacy policies.</p>
+<h2>Data sharing</h2>
+<p>The app has no developer-operated server, advertising SDK or analytics SDK. It does not sell personal data, send briefing contents to an AI summarization service, or send notification, calendar or task contents to the developer. Google processes authorized Tasks requests, and your selected speech providers process speech input or output as described above.</p>
+<h2>Your controls</h2>
+<p>You can disable the morning briefing or individual sources, add notification filters, disconnect Google Tasks in the app, and clear collected previews and the saved briefing. Android settings lets you revoke notification, calendar and microphone permissions or clear app storage. Clearing app storage or uninstalling also removes alarm settings and passages.</p>
+<p>You can revoke the Google account grant through <a href="https://myaccount.google.com/connections">Google Account connections</a>. This stops future authorized Tasks access. Clearing app storage removes locally cached task-list information and saved briefing text.</p>
+<h2>This website</h2>
+<p>These pages are hosted by GitHub Pages. GitHub processes website requests under the <a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement">GitHub Privacy Statement</a>. These pages contain no analytics scripts or contact forms.</p>
+<h2>Contact and updates</h2>
+<p>Contact the maintainer through <a href="https://github.com/timothyjacobmail/AriseOSleeper/issues">the project’s GitHub issues</a>. Please avoid including private messages, task contents, access tokens or other sensitive information in a public issue. Policy updates will be published on this page with an updated effective date.</p>
+<footer>Arise O Sleeper · <a href="https://github.com/timothyjacobmail/AriseOSleeper">Project on GitHub</a></footer>
+</main></body>
+</html>

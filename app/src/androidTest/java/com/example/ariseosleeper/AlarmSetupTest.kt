@@ -43,7 +43,7 @@ class AlarmSetupTest {
         }
     }
 
-    @Test fun missingExactAlarmAccessHasAnActionAndEnablingOrSavingOpensSetup() {
+    @Test fun missingExactAlarmAccessHasAnActionAndOnlySavingTheDraftOpensSetup() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val c = instrumentation.targetContext
         assumeTrue(Build.VERSION.SDK_INT >= 31)
@@ -69,9 +69,9 @@ class AlarmSetupTest {
                     // When notifications are already granted, exact-alarm access is the next step.
                     if (AlarmSetup.missing(c).first() == AlarmSetupStep.EXACT_ALARMS) {
                         views().filterIsInstance<CheckBox>().first { it.text == "Daily alarms enabled" }.isChecked = true
-                        assertEquals(2, monitor.hits)
+                        assertEquals(1, monitor.hits)
                         views().filterIsInstance<TextView>().first { it.text == "Save alarm settings" }.performClick()
-                        assertEquals(3, monitor.hits)
+                        assertEquals(2, monitor.hits)
                         assertFalse(VerseAlarmStore.read(c).config.enabled)
                     }
                 }

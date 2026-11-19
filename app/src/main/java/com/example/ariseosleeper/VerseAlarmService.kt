@@ -3,7 +3,10 @@ package com.example.ariseosleeper
 import android.app.Notification
 import android.app.NotificationManager
 import android.app.Service
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
@@ -17,8 +20,9 @@ import android.os.Looper
 import android.os.PowerManager
 import android.os.VibrationEffect
 import android.os.Vibrator
+import androidx.core.content.ContextCompat
 
-/** Audio lives outside the activity, so Back, Home and screen-off do not dismiss a challenge. */
+/** Audio lives outside the activity; screen-off can quiet, but never finish, a challenge. */
 class VerseAlarmService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private var ringtone: Ringtone? = null
@@ -27,6 +31,13 @@ class VerseAlarmService : Service() {
     private var focusGranted = false
     private var vibrating = false
     private var announced = false
+    private val screenOff = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action != Intent.ACTION_SCREEN_OFF) return
+            val ch = VerseAlarmStore.read(context).challenge ?: return
+            if (VerseAlarmStore.quiet(context, ch.id)) VerseAlarmScheduler.sync(context)
+        }
+    }
     private val attributes = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM)
         .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build()
     private val tick = object : Runnable {
@@ -45,6 +56,10 @@ class VerseAlarmService : Service() {
     override fun onCreate() {
         super.onCreate()
         VerseAlarmScheduler.channel(this)
+        // Power key events are handled by Android. Observe screen-off in the audio
+        // service so this also works on the lock screen or behind another app.
+        ContextCompat.registerReceiver(this, screenOff, IntentFilter(Intent.ACTION_SCREEN_OFF),
+            ContextCompat.RECEIVER_NOT_EXPORTED)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -97,6 +112,7 @@ class VerseAlarmService : Service() {
     }
 
     override fun onDestroy() {
+        unregisterReceiver(screenOff)
         handler.removeCallbacksAndMessages(null)
         ringtone?.stop()
         getSystemService(Vibrator::class.java).cancel()

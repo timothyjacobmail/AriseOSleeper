@@ -33,6 +33,7 @@ class VerseAlarmStoreTest {
         assertFalse(VerseAlarmStore.answer(c, ch.id, "wrong", false, now))
         assertTrue(VerseAlarmStore.answer(c, ch.id, text, false, now))
         assertFalse(VerseAlarmStore.answer(c, ch.id, text, false, now))
+        assertNull(VerseAlarmStore.read(c).completedRoutineId)
         val second = VerseAlarmStore.read(c).challenge!!
         assertFalse(VerseAlarmStore.answer(c, second.id, text, false, now))
         val later = now.copy(wall = now.wall + 300_000, elapsed = now.elapsed + 300_000)
@@ -44,6 +45,8 @@ class VerseAlarmStoreTest {
             later.copy(wall = later.wall + 300_000, elapsed = later.elapsed + 300_000)))
         assertNull(VerseAlarmStore.read(c).challenge)
         assertEquals(3, VerseAlarmStore.read(c).verses.single().successes)
+        assertEquals(third.id, VerseAlarmStore.read(c).completedRoutineId)
+        assertEquals(later.wall + 300_000, VerseAlarmStore.read(c).completedRoutineAt)
     }
 
     @Test fun quietTimeIsLimitedAndDoesNotAwardCredit() {
